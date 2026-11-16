@@ -8,7 +8,8 @@ Before opening an issue:
 1. Confirm Photoshop is version 25.0 or newer.
 2. Confirm `manifest.json` is directly inside the installed `ExactFill` folder.
 3. If the error mentions a connection, allow outbound HTTPS from Photoshop/UXP
-   to `api.openai.com` (OpenAI) or `generativelanguage.googleapis.com` (Gemini).
+   to `openrouter.ai` (edit conversation), `api.openai.com` (OpenAI),
+   `api.wavespeed.ai` (WaveSpeedAI) or `generativelanguage.googleapis.com` (Gemini).
    An explicit Windows Firewall Block rule overrides conflicting Allow rules.
 4. Try the same request without references or live preview.
 5. Include the provider, model, Photoshop version, OS and steps to reproduce.

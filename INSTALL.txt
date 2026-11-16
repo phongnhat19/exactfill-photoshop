@@ -22,8 +22,10 @@ ExactFill makes direct HTTPS requests from Photoshop/UXP. If a firewall, proxy,
 endpoint-security product or an outbound policy restricts Photoshop, allow TCP
 port 443 to the provider you use:
 
-   OpenAI:  api.openai.com
-   Gemini:  generativelanguage.googleapis.com
+   OpenRouter:   openrouter.ai
+   WaveSpeedAI:  api.wavespeed.ai
+   OpenAI:       api.openai.com
+   Gemini:       generativelanguage.googleapis.com
 
 The permission in manifest.json only grants ExactFill access inside the UXP
 sandbox; it cannot override Windows Firewall or third-party security software.
@@ -66,8 +68,10 @@ ExactFill makes direct HTTPS requests from Photoshop/UXP. If a network monitor,
 proxy or third-party firewall restricts Photoshop, allow Photoshop/Adobe UXP to
 connect on TCP port 443 to the provider you use:
 
-   OpenAI:  api.openai.com
-   Gemini:  generativelanguage.googleapis.com
+   OpenRouter:   openrouter.ai
+   WaveSpeedAI:  api.wavespeed.ai
+   OpenAI:       api.openai.com
+   Gemini:       generativelanguage.googleapis.com
 
 The permission in manifest.json only grants ExactFill access inside the UXP
 sandbox; it cannot override macOS network filters or third-party firewalls.
@@ -104,8 +108,10 @@ ExactFill makes direct HTTPS requests from Photoshop/UXP. If a firewall, proxy,
 security product, or outbound policy restricts Photoshop, allow TCP port 443
 to the domain of the provider you need:
 
-   OpenAI:  api.openai.com
-   Gemini:  generativelanguage.googleapis.com
+   OpenRouter:   openrouter.ai
+   WaveSpeedAI:  api.wavespeed.ai
+   OpenAI:       api.openai.com
+   Gemini:       generativelanguage.googleapis.com
 
 The permission in manifest.json only grants ExactFill access inside the UXP
 sandbox; it cannot bypass Windows Firewall or a third-party security product.
@@ -148,8 +154,10 @@ ExactFill makes direct HTTPS requests from Photoshop/UXP. If a network monitor,
 proxy, or third-party firewall restricts Photoshop, allow Photoshop/Adobe UXP
 to connect on TCP port 443 to the domain of the provider you need:
 
-   OpenAI:  api.openai.com
-   Gemini:  generativelanguage.googleapis.com
+   OpenRouter:   openrouter.ai
+   WaveSpeedAI:  api.wavespeed.ai
+   OpenAI:       api.openai.com
+   Gemini:       generativelanguage.googleapis.com
 
 The permission in manifest.json only grants ExactFill access inside the UXP
 sandbox; it cannot bypass macOS network filters or a third-party firewall.

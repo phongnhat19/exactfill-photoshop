@@ -139,6 +139,16 @@ test('preflight decides the route in seconds instead of waiting out the request 
     assert.ok(t.PREFLIGHT_MS <= 10000, 'the real deadline stays in seconds');
 });
 
+test('curl refuses hosts outside the provider allowlist', async () => {
+    assert.equal(t.allowedUrl('https://openrouter.ai/api/alpha/decisions'), true);
+    assert.equal(t.allowedUrl('https://api.openai.com/v1/models'), true);
+    assert.equal(t.allowedUrl('https://generativelanguage.googleapis.com/v1beta/models'), true);
+    assert.equal(t.allowedUrl('https://api.wavespeed.ai/api/v3'), true);
+    assert.equal(t.allowedUrl('http://openrouter.ai/api/v1/chat/completions'), false);
+    assert.equal(t.allowedUrl('https://evil.example/openrouter.ai'), false);
+    await assert.rejects(() => t.fetchLike('https://evil.example/v1'), /Blocked network host: evil\.example/);
+});
+
 test('an unavailable bridge is reported, not silently swallowed', async () => {
     const cap = await t.probe();
     assert.equal(cap.ok, false, 'there is no Photoshop in the test runner');

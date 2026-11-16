@@ -6,10 +6,12 @@
  *  That is why two separate plugins no longer need to exist.
  * ========================================================================== */
 
+const wavespeed = require('./wavespeed.js');
 const openai = require('./openai.js');
 const google = require('./google.js');
 
-const ALL = [openai, google];
+/* WaveSpeed is first so a fresh install selects it. A saved provider id still wins. */
+const ALL = [wavespeed, openai, google];
 
 /** For filling the provider picker. */
 function list() {

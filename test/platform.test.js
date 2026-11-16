@@ -60,6 +60,7 @@ test('manifest v5 has the same permissions on macOS and Windows', () => {
     assert.deepEqual(manifest.requiredPermissions?.launchProcess?.schemes, ['https']);
     assert.ok(manifest.requiredPermissions?.network?.domains?.includes('https://api.openai.com'));
     assert.ok(manifest.requiredPermissions?.network?.domains?.includes('https://generativelanguage.googleapis.com'));
+    assert.ok(manifest.requiredPermissions?.network?.domains?.includes('https://openrouter.ai'));
 });
 
 test('runtime contains no absolute platform-specific paths', () => {
@@ -202,7 +203,7 @@ test('critical panel controls use deterministic UXP-safe markup', () => {
     const html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
     const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
     const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
-    assert.match(html, /id="generate-btn" type="button" class="action-btn primary-btn/);
+    assert.match(html, /id="talk-send" type="button" class="action-btn primary-btn"/);
     assert.match(html, /id="plan-card" class="plan-card dim"/);
     assert.match(html, /class="advanced-stack"/);
     assert.match(html, /<svg class="chevron"/);
@@ -313,7 +314,7 @@ test('refine is bound to the geometry of the run it refines', () => {
        So the gate is on the source of the coordinates: lastRun, not readSettings. */
     const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
     const body = main.slice(main.indexOf('async function runRefine('),
-                            main.indexOf('async function onGenerate('));
+                            main.indexOf('function contextStamp('));
     assert.ok(body, 'runRefine must exist separately from onGenerate');
     assert.match(body, /ctx:\s*lastRun\.ctx,\s*target:\s*lastRun\.target/,
         'the refine frame is taken from the previous run');

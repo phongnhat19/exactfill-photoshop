@@ -23,6 +23,31 @@
 
 const curlI18n = require('../i18n.js');
 
+/** Hosts the plugin may ask curl to contact. Anything else is refused before a process starts. */
+const ALLOWED_HOSTS = new Set([
+    'api.openai.com',
+    'generativelanguage.googleapis.com',
+    'api.wavespeed.ai',
+    'openrouter.ai',
+]);
+
+function allowedUrl(url) {
+    try {
+        const parsed = new URL(url);
+        return parsed.protocol === 'https:' && ALLOWED_HOSTS.has(parsed.host);
+    } catch (e) {
+        return false;
+    }
+}
+
+function assertAllowedUrl(url) {
+    if (!allowedUrl(url)) {
+        let host = 'invalid-url';
+        try { host = new URL(url).host || host; } catch (e) {}
+        throw new Error(`Blocked network host: ${host}`);
+    }
+}
+
 /** Transport state: 'auto' | 'direct' | 'curl'. The decision is in active(). */
 let mode = 'auto';
 /** Cache of the capability check: null | { ok, reason } */
@@ -191,6 +216,7 @@ const isRouteDecided = () => routeDecided;
  * care that a response arrived, not what its code was.
  */
 async function decideRoute(origin, { fetchImpl, timeoutMs = PREFLIGHT_MS } = {}) {
+    assertAllowedUrl(origin.endsWith('/') ? origin : origin + '/');
     if (routeDecided) return routeUseCurl;
     const doFetch = fetchImpl || (typeof fetch === 'function' ? fetch : null);
     routeDecided = true;
@@ -323,6 +349,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
  */
 async function curlFetch(url, { method = 'GET', headers = {}, body,
                                 timeoutMs = 300000, signal, stream = false } = {}) {
+    assertAllowedUrl(url);
     const cap = await probe();
     if (!cap.ok) throw new Error(cap.reason);
 
@@ -500,7 +527,7 @@ async function fetchLikeStream(url, init = {}) {
 
 module.exports = {
     // pure, for tests
-    isAsciiPath, quoteConfigValue, buildCurlConfig, shellQuote,
+    allowedUrl, isAsciiPath, quoteConfigValue, buildCurlConfig, shellQuote,
     buildJobJsx, parseWriteOut, parseHeaderDump, describeCurlExit,
     // state and runtime
     setMode, getMode, active, noteDirectFailure, resetDirectFailure,

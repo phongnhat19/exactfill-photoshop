@@ -1,7 +1,7 @@
 {
   "name": "exactfill-photoshop",
   "version": "1.7.1",
-  "description": "Free open-source Photoshop plugin for exact AI edits with your own OpenAI and Google Gemini API keys.",
+  "description": "Free open-source Photoshop plugin for exact AI edits with your own WaveSpeedAI, OpenAI and Google Gemini API keys.",
   "main": "index.html",
   "scripts": {
     "check": "for f in *.js providers/*.js test/*.js test/stubs/*.js; do node --check \"$f\" || exit 1; done",

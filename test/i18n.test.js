@@ -19,6 +19,7 @@ test('every translation is non-empty and resolves placeholders', () => {
                 host: 'api.example.com', refusal: '', reason: 'reason', detail: '', text: 'text',
                 code: 28, model: 'gpt-image-2', date: '2026-12-01', replacement: 'GPT Image 2.5 Flare',
                 cost: '', usd: '$0.13', low: '$0.08', high: '$0.18', turn: '',
+                max: 14, mb: 100, min: 384, minutes: 10, status: 'failed',
             });
             assert.doesNotMatch(rendered, /\{\w+\}/, `${locale}:${key} has an unresolved placeholder`);
         }

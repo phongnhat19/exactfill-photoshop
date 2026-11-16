@@ -42,4 +42,9 @@ const LEGACY = {
     history: 'nanobanana_prompt_history',  // same
 };
 
-module.exports = { LS, LEGACY };
+/** secureStorage names. These are not localStorage keys and must not be copied there. */
+const SECURE = {
+    openrouter: 'openrouterApiKey',
+};
+
+module.exports = { LS, LEGACY, SECURE };

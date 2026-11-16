@@ -136,7 +136,8 @@ test('the model list is the same with a key and without one', async () => {
     const withKey = await openai.models('sk-whatever');
     const without = await openai.models(null);
     assert.deepEqual(withKey.map(m => m.id), without.map(m => m.id));
-    assert.ok(withKey.length >= 6, `expected the full list, have ${withKey.length}`);
+    // gpt-image-1 left the picker on 2026-10-23, so the living catalog is five until 1 Dec.
+    assert.ok(withKey.length >= 5, `expected the full list, have ${withKey.length}`);
     assert.ok(withKey.some(m => m.id === 'gpt-image-2.5-sunburst'));
     assert.ok(withKey.some(m => m.id === 'gpt-image-2.5-flare'));
     for (const m of withKey) assert.ok(m.caps && m.caps.qualities, `${m.id} without caps`);

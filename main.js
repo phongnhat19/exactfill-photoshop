@@ -1,5 +1,5 @@
 /* ============================================================================
- *  main.js — the single flow: selection → prompt → provider → Smart Object.
+ *  main.js — selection → Vietnamese edit conversation → provider → Smart Object.
  *
  *  There is NO geometry here (geometry.js), NO pixel work (capture.js),
  *  NO insertion (place.js) and NO knowledge of providers (providers/).
@@ -16,6 +16,8 @@ const { batchPlay } = require('photoshop').action;
 const uxpStorage = require('uxp').storage;
 
 const providers = require('./providers/index.js');
+const openrouter = require('./providers/openrouter.js');
+const conversation = require('./conversation.js');
 const geometry   = require('./geometry.js');
 const place      = require('./place.js');
 const capture    = require('./capture.js');
@@ -31,7 +33,7 @@ const { mimeOfB64 } = require('./png.js');
 /* Storage keys and settings reads live separately: the first so there are not
    five copies of the string 'ai_provider' across files, the second so coercing
    quality to what the model can do can be tested in node, not only in Photoshop. */
-const { LEGACY } = require('./storage-keys.js');
+const { LEGACY, SECURE } = require('./storage-keys.js');
 const {
     LS, num, checked,
     currentProvider, currentCaps, allowedQualities, currentQuality, readSettings,
@@ -43,6 +45,8 @@ const httpTransport = require('./providers/http.js').transport;
 
 let busy = false;
 let abortCtrl = null;
+let talkFlight = 0;
+const talkSession = conversation.createSession();
 let references = [];        // [{ name, blob }]
 let lastRun = null;         // { prompt, provider, model, ctx, target, ... }
 let modelRefreshSeq = 0;    // guards against races when the provider changes quickly
@@ -106,7 +110,7 @@ function setStatus(text) {
 
 function setBusy(on) {
     busy = on;
-    const btn = $('generate-btn');
+    const btn = $('talk-send');
     if (btn) {
         btn.disabled = on;                 // double-click guard — the old code did not have one
         btn.setAttribute('aria-busy', on ? 'true' : 'false');
@@ -133,6 +137,9 @@ function setBusy(on) {
     if (cancel) cancel.classList.toggle('hidden', !on);
     const sp = $('spinner');
     if (sp) sp.classList.toggle('hidden', !on);
+    if (window.aiAuth && typeof window.aiAuth.setSettingsLocked === 'function') {
+        window.aiAuth.setSettingsLocked(on);
+    }
 }
 
 function showPreview(b64) {
@@ -298,6 +305,7 @@ function bindModelPicker(picker, items) {
         // would stay on a model it does not apply to.
         if (picked && picked.title) picker.setAttribute('title', picked.title);
         else picker.removeAttribute('title');
+        applyProviderCapabilities();
         refreshPlanLine();
     });
 }
@@ -372,6 +380,14 @@ async function refreshModels() {
     // The model may just have changed (another provider, another list) — quality
     // levels must be redrawn for it before the user presses anything.
     initQuality();
+    applyProviderCapabilities();
+}
+
+/** Model caps override the provider flag when the model declares the control. */
+function capabilityOn(provider, flag, capsKey) {
+    const caps = currentCaps();
+    if (caps && Object.prototype.hasOwnProperty.call(caps, capsKey)) return caps[capsKey] !== false;
+    return provider[flag] !== false;
 }
 
 /** Disables controls the provider does not support, instead of ignoring them silently. */
@@ -382,14 +398,21 @@ function applyProviderCapabilities() {
         if (!el) return;
         el.disabled = !ok;
         el.parentElement?.classList.toggle('unsupported', !ok);
-        if (!ok) el.title = why;
+        if (!ok) {
+            el.title = why;
+        } else {
+            const key = el.getAttribute('data-i18n-title');
+            if (key) el.title = mainI18n.t(key);
+        }
     };
-    dim('transparent-bg', p.supportsTransparent !== false,
+    dim('transparent-bg', capabilityOn(p, 'supportsTransparent', 'transparent'),
         mainI18n.t('cap.noTransparent', { provider: p.label }));
-    dim('live-preview', p.supportsStream !== false,
+    dim('live-preview', capabilityOn(p, 'supportsStream', 'stream'),
         mainI18n.t('cap.noPreview', { provider: p.label }));
-    dim('add-ref-btn', p.supportsReferences !== false,
+    dim('add-ref-btn', capabilityOn(p, 'supportsReferences', 'references'),
         mainI18n.t('cap.noReferences', { provider: p.label }));
+    dim('ignore-pixels', capabilityOn(p, 'supportsIgnorePixels', 'ignorePixels'),
+        mainI18n.t('cap.noIgnore', { provider: p.label }));
 }
 
 /**
@@ -500,7 +523,10 @@ function refreshTransportBadge() {
 let planTimer = null;
 function schedulePlanLine() {
     if (planTimer) clearTimeout(planTimer);
-    planTimer = setTimeout(refreshPlanLine, 250);
+    planTimer = setTimeout(() => {
+        refreshPlanLine();
+        noteContextDrift();
+    }, 250);
 }
 
 function setPlanCard(titleKey, body, ready) {
@@ -522,7 +548,10 @@ function forecastNote({ provider, model, quality, plan }) {
         const f = usageTracker.forecastCost({
             provider: provider.id, model, quality, plan, history: ledger.load(),
         });
-        if (f.usd === null) return '';
+        if (f.usd === null) {
+            return provider.id === 'wavespeed'
+                ? ` · ${mainI18n.t('plan.costUnavailable')}` : '';
+        }
         const usd = usageTracker.formatUsd(f.usd);
         return f.low === f.high
             ? ` · ${mainI18n.t('plan.cost', { usd })}`
@@ -922,10 +951,14 @@ async function collectRunInputs(mode) {
     const provider = currentProvider();
     const apiKey = await window.aiAuth.getKey(provider.keyName);
     if (!apiKey) {
-        await core.showAlert(mainI18n.t('alert.noKey', { provider: provider.label }));
+        const message = mainI18n.t('settings.needKey', { provider: provider.label });
+        if (window.aiAuth.openSettings) await window.aiAuth.openSettings(message);
+        else await core.showAlert(mainI18n.t('alert.noKey', { provider: provider.label }));
         return null;
     }
-    return { doc, provider, model, prompt, apiKey, s: readSettings() };
+    const s = readSettings();
+    if (!capabilityOn(provider, 'supportsIgnorePixels', 'ignorePixels')) s.ignorePixels = false;
+    return { doc, provider, model, prompt, apiKey, s };
 }
 
 /**
@@ -1073,6 +1106,306 @@ async function runRefine({ provider, model, prompt, apiKey, s }) {
     return { res, plan, ctx: lastRun.ctx, target: lastRun.target };
 }
 
+function contextStamp(doc, target, s) {
+    const layers = doc && doc.activeLayers;
+    const layer = (layers && layers[0]) || (doc && doc.activeLayer) || null;
+    return {
+        docId: doc.id,
+        layerId: layer && layer.id != null ? layer.id : 0,
+        layerOnly: !!s.layerOnly,
+        pad: Number(s.padPercent) || 0,
+        left: target.left, top: target.top, right: target.right, bottom: target.bottom,
+    };
+}
+
+async function readContextStamp() {
+    const doc = app.activeDocument;
+    if (!doc) return null;
+    const s = readSettings();
+    const sel = await core.executeAsModal(() => readSelectionBounds(doc),
+        { commandName: mainI18n.t('command.readSelection') });
+    if (!sel || !sel.bounds) return null;
+    return contextStamp(doc, geometry.integerTarget(sel.bounds), s);
+}
+
+/** A moved document, layer, or selection retires the in-memory discussion. */
+async function noteContextDrift() {
+    if (busy || !talkSession.messages.length || !talkSession.anchor) return;
+    const stamp = await readContextStamp();
+    if (!stamp || conversation.sameStamp(talkSession.anchor, stamp)) return;
+    talkFlight += 1;
+    talkSession.epoch += 1;
+    talkSession.messages = [];
+    talkSession.anchor = null;
+    talkSession.brief = '';
+    talkSession.generatedOp = null;
+    renderTalk();
+    setTalkState(mainI18n.t('talk.context'));
+}
+
+function setTalkState(text) {
+    const el = $('talk-state');
+    if (el) el.textContent = text || '';
+}
+
+function renderTalk() {
+    const log = $('talk-log');
+    if (!log) return;
+    dom.fill(log, talkSession.messages.map(msg => {
+        const row = dom.el('div', 'talk-msg ' + (msg.role === 'user' ? 'talk-user' : 'talk-assistant'));
+        row.append(
+            dom.el('div', 'talk-who', mainI18n.t(msg.role === 'user' ? 'talk.you' : 'talk.assistant')),
+            dom.el('div', 'talk-body', msg.text),
+        );
+        return row;
+    }));
+    log.scrollTop = log.scrollHeight;
+    const brief = $('talk-brief');
+    if (brief) {
+        const text = (talkSession.brief || '').trim();
+        brief.textContent = text ? `${mainI18n.t('talk.briefLabel')}: ${text}` : '';
+        brief.classList.toggle('hidden', !text);
+    }
+}
+
+function clearComposer() {
+    const input = $('prompt-input');
+    if (input) input.value = '';
+    localStorage.setItem(LS.prompt, '');
+    updateCharCount('prompt-input', 'prompt-count');
+}
+
+/**
+ * Shared tail for a paid edit. Regenerate, Refine, and a ready discussion all
+ * land here so placement and history stay one path. A superseded turn does not
+ * insert: the response arrived after cancel, reset, or a context change.
+ */
+async function acceptResult({ res, plan, ctx, target, input, refBlobs, refining, prompt,
+                               provider, model, s, docId, stillCurrent }) {
+    const images = (res && res.images) || [];
+    if (!images.length) { await core.showAlert(mainI18n.t('alert.noImages')); return; }
+    showPreview(images[0]);
+    recordUsage({
+        provider: provider.id,
+        providerLabel: provider.label,
+        model,
+        quality: s.quality,
+        plan,
+        route: refining ? 'responses' : 'edits',
+        imageCount: images.length,
+        hasImageInput: refining || !!input || refBlobs.length > 0,
+    }, res.usage);
+    if (stillCurrent && !stillCurrent()) return;
+    if (!app.activeDocument || app.activeDocument.id !== docId) {
+        await core.showAlert(mainI18n.t('alert.documentChanged'));
+        return;
+    }
+    setStatus(mainI18n.t('status.inserting'));
+    await insertImage(images[0], ctx, target, s.feather);
+    await rememberRun({
+        prompt: refining ? lastRun.prompt : prompt,
+        provider: provider.id, model, ctx, target, plan,
+        padPercent: refining ? lastRun.padPercent : s.padPercent,
+        quality: s.quality,
+        responseId: res.responseId || null,
+        turn: refining ? (lastRun.turn || 1) + 1 : 1,
+        refinedWith: refining ? prompt : undefined,
+    }, images[0], s);
+    setStatus(mainI18n.t('status.done'));
+    setTalkState('');
+}
+
+function stopTalk(message) {
+    talkFlight += 1;
+    talkSession.epoch += 1;
+    if (abortCtrl) abortCtrl.abort();
+    abortCtrl = null;
+    if (message) setTalkState(message);
+    setBusy(false);
+}
+
+function resetTalk() {
+    talkFlight += 1;
+    talkSession.epoch += 1;
+    talkSession.messages = [];
+    talkSession.anchor = null;
+    talkSession.brief = '';
+    talkSession.generatedOp = null;
+    if (abortCtrl) abortCtrl.abort();
+    abortCtrl = null;
+    renderTalk();
+    setTalkState(mainI18n.t('talk.resetDone'));
+    setStatus('');
+    setBusy(false);
+}
+
+async function onDiscuss() {
+    if (busy) return;
+    const draft = ($('prompt-input')?.value || '').trim();
+    if (!draft) { setTalkState(mainI18n.t('talk.empty')); return; }
+    const flight = ++talkFlight;
+    abortCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const signal = abortCtrl ? abortCtrl.signal : undefined;
+    setBusy(true);
+    showPreview(null);
+    const residual = $('residual-text');
+    if (residual) residual.textContent = '';
+
+    try {
+        const openrouterKey = await window.aiAuth.getKey(SECURE.openrouter);
+        if (flight !== talkFlight) return;
+        if (!openrouterKey) {
+            const message = mainI18n.t('settings.openrouterNeed');
+            if (window.aiAuth.openSettings) await window.aiAuth.openSettings(message, 'openrouter-key-input');
+            else await core.showAlert(message);
+            return;
+        }
+        const outcome = await conversation.runTurn(talkSession, {
+            text: draft,
+            signal,
+            presets: presetManager.getAll().filter(p => p.active && p.content).map(p => p.content),
+            cancelledText: mainI18n.t('talk.cancelled'),
+            fallbackQuestion: mainI18n.t('talk.fallback'),
+            onPhase: phase => {
+                if (flight === talkFlight) renderTalk();
+                const key = {
+                    thinking: 'talk.thinking',
+                    deciding: 'talk.deciding',
+                    clarify: 'talk.clarify',
+                    context: 'talk.context',
+                }[phase];
+                if (key && flight === talkFlight) setTalkState(mainI18n.t(key));
+            },
+            capture: async () => {
+                const doc = app.activeDocument;
+                if (!doc) { await core.showAlert(mainI18n.t('alert.openDocument')); return null; }
+                const s = readSettings();
+                const region = await resolveRegion(false, doc, s.padPercent);
+                if (!region) return null;
+                const provider = currentProvider();
+                const payload = await capturePayload({
+                    s: { ...s, ignorePixels: false }, provider, ctx: region.ctx, target: region.target,
+                });
+                if (!payload.input) return null;
+                return {
+                    blob: payload.input,
+                    mask: payload.mask,
+                    ctx: region.ctx,
+                    target: region.target,
+                    docId: doc.id,
+                    stamp: contextStamp(doc, region.target, s),
+                };
+            },
+            context: () => readContextStamp(),
+            chat: info => openrouter.completeChat({
+                apiKey: openrouterKey,
+                messages: info.messages,
+                imageBlob: info.image && info.image.blob,
+                clarify: info.clarify,
+                brief: info.brief,
+                signal,
+            }),
+            decide: info => openrouter.completeDecision({
+                apiKey: openrouterKey,
+                messages: info.messages,
+                brief: info.brief,
+                imageBlob: info.image && info.image.blob,
+                stamp: info.stamp,
+                references: references.map(item => ({ name: item.name })),
+                withdrawn: info.withdrawn,
+                signal,
+            }),
+            generate: async ({ prompt, image, stillCurrent }) => {
+                if (!stillCurrent()) return;
+                const provider = currentProvider();
+                const model = localStorage.getItem(LS.model);
+                if (!model) {
+                    await core.showAlert(mainI18n.t('alert.chooseModel'));
+                    const err = new Error('model');
+                    err.workflow = true;
+                    throw err;
+                }
+                const apiKey = await window.aiAuth.getKey(provider.keyName);
+                if (!apiKey) {
+                    const message = mainI18n.t('settings.needKey', { provider: provider.label });
+                    if (window.aiAuth.openSettings) await window.aiAuth.openSettings(message);
+                    else await core.showAlert(mainI18n.t('alert.noKey', { provider: provider.label }));
+                    const err = new Error('key');
+                    err.workflow = true;
+                    throw err;
+                }
+                if (!stillCurrent()) return;
+                if (!conversation.sameStamp(image.stamp, await readContextStamp())) {
+                    setTalkState(mainI18n.t('talk.context'));
+                    const err = new Error('context');
+                    err.workflow = true;
+                    throw err;
+                }
+                if (!stillCurrent()) return;
+                const s = readSettings();
+                if (!capabilityOn(provider, 'supportsIgnorePixels', 'ignorePixels')) s.ignorePixels = false;
+                const plan = geometry.planRequest(provider.capsFor(model), image.ctx, s.quality);
+                console.log('[main] request plan:', JSON.stringify(plan), 'ctx', image.ctx.w + '×' + image.ctx.h);
+                setStatus(mainI18n.t('status.generating'));
+                setTalkState(mainI18n.t('talk.generating'));
+                const wantPreview = s.livePreview && provider.supportsStream !== false;
+                const refBlobs = (provider.supportsReferences !== false) ? references.map(item => item.blob) : [];
+                const sendPixels = !s.ignorePixels;
+                const res = await provider.generate({
+                    apiKey, model, prompt,
+                    imageBlob: sendPixels ? image.blob : null,
+                    maskBlob: sendPixels ? image.mask : null,
+                    references: refBlobs,
+                    plan,
+                    background: s.transparent && capabilityOn(provider, 'supportsTransparent', 'transparent') ? 'transparent' : null,
+                    ignorePixels: s.ignorePixels,
+                    signal,
+                    onPartial: wantPreview ? (b64, idx) => {
+                        showPreview(b64);
+                        setStatus(mainI18n.t('status.partial', { number: (idx ?? 0) + 1 }));
+                    } : null,
+                    onProgress: st => setStatus(st),
+                });
+                await acceptResult({
+                    res, plan, ctx: image.ctx, target: image.target,
+                    input: sendPixels ? image.blob : null, refBlobs,
+                    refining: false, prompt, provider, model, s,
+                    docId: image.docId, stillCurrent,
+                });
+            },
+        });
+        if (flight !== talkFlight) return;
+        renderTalk();
+        if (outcome.accepted) clearComposer();
+        const quiet = outcome.generated || outcome.reason === 'blocked' || outcome.reason === 'cancelled';
+        if (!quiet) {
+            const key = {
+                clarify: 'talk.clarify',
+                malformed: 'talk.badReply',
+                api: 'talk.apiError',
+                context: 'talk.context',
+                empty: 'talk.empty',
+            }[outcome.reason];
+            if (key) setTalkState(mainI18n.t(key));
+        }
+    } catch (e) {
+        if (flight !== talkFlight) return;
+        if (e && e.cancelled) {
+            setStatus(mainI18n.t('status.cancelled'));
+        } else {
+            console.error('[main] discussion failed');
+            setTalkState(mainI18n.t('talk.apiError'));
+            setStatus(mainI18n.t('status.error'));
+        }
+    } finally {
+        if (flight === talkFlight) {
+            abortCtrl = null;
+            setBusy(false);
+            try { refreshTransportBadge(); } catch (err) {}
+        }
+    }
+}
+
 async function onGenerate(mode) {
     if (busy) return;
     const refining = mode === 'refine';
@@ -1086,6 +1419,7 @@ async function onGenerate(mode) {
     const { doc, provider, model, prompt, apiKey, s } = run;
 
     const docId = doc.id;
+    const flight = ++talkFlight;
     abortCtrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     setBusy(true);
     showPreview(null);
@@ -1124,7 +1458,7 @@ async function onGenerate(mode) {
                 imageBlob: input, maskBlob: payload.mask,
                 references: refBlobs,
                 plan,
-                background: s.transparent && provider.supportsTransparent !== false ? 'transparent' : null,
+                background: s.transparent && capabilityOn(provider, 'supportsTransparent', 'transparent') ? 'transparent' : null,
                 ignorePixels: s.ignorePixels,
                 signal: abortCtrl ? abortCtrl.signal : undefined,
                 onPartial: wantPreview ? (b64, idx) => {
@@ -1135,51 +1469,14 @@ async function onGenerate(mode) {
             });
         }
 
-        const images = (res && res.images) || [];
-        if (!images.length) { await core.showAlert(mainI18n.t('alert.noImages')); return; }
-        showPreview(images[0]);
-
-        // Record immediately after a successful API response: the money is already
-        // spent, even if the user switches documents and insertion has to be cancelled.
-        /* route on the record is not decoration. The price forecast takes the median
-           of the user's OWN requests; conversation tokens and images/edits tokens are
-           different quantities, and mixed into one median they would spoil both estimates. */
-        recordUsage({
-            provider: provider.id,
-            providerLabel: provider.label,
-            model,
-            quality: s.quality,
-            plan,
-            route: refining ? 'responses' : 'edits',
-            imageCount: images.length,
-            hasImageInput: refining || !!input || refBlobs.length > 0,
-        }, res.usage);
-
-        /* 5. Insertion */
-        if (!app.activeDocument || app.activeDocument.id !== docId) {
-            await core.showAlert(mainI18n.t('alert.documentChanged'));
-            return;
-        }
-        setStatus(mainI18n.t('status.inserting'));
-        await insertImage(images[0], ctx, target, s.feather);
-
-        /* 6. Memory of the run.
-           Refine does NOT overwrite the prompt: Regenerate after it must mean
-           "the same original idea again", not a repeat of the line "make the
-           shadow softer" against the original pixels. Only the conversation link
-           (responseId) and the frame now being refined (cacheId in rememberRun) change. */
-        await rememberRun({
-            prompt: refining ? lastRun.prompt : prompt,
-            provider: provider.id, model, ctx, target, plan,
-            padPercent: refining ? lastRun.padPercent : s.padPercent,
-            quality: s.quality,
-            responseId: res.responseId || null,
-            turn: refining ? (lastRun.turn || 1) + 1 : 1,
-            refinedWith: refining ? prompt : undefined,
-        }, images[0], s);
-        setStatus(mainI18n.t('status.done'));
+        /* Refine does not overwrite the stored prompt: Regenerate after it means
+           the original idea, not the line "make the shadow softer". */
+        await acceptResult({
+            res, plan, ctx, target, input, refBlobs, refining, prompt, provider, model, s, docId,
+        });
 
     } catch (e) {
+        if (flight !== talkFlight) return;
         if (e && e.cancelled) {
             setStatus(mainI18n.t('status.cancelled'));
         } else {
@@ -1188,11 +1485,13 @@ async function onGenerate(mode) {
             setStatus(mainI18n.t('status.error'));
         }
     } finally {
-        abortCtrl = null;
-        setBusy(false);
-        // 'auto' may have switched to curl inside this run — the badge must
-        // show the actual route, not the one from the start
-        try { refreshTransportBadge(); } catch (e) {}
+        if (flight === talkFlight) {
+            abortCtrl = null;
+            setBusy(false);
+            // 'auto' may have switched to curl inside this run — the badge must
+            // show the actual route, not the one from the start
+            try { refreshTransportBadge(); } catch (e) {}
+        }
     }
 }
 
@@ -1308,8 +1607,17 @@ document.addEventListener('DOMContentLoaded', () => {
     initUI();
     watchSelection();
 
-    const btn = $('generate-btn');
-    if (btn) btn.addEventListener('click', () => onGenerate('new'));
+    const btn = $('talk-send');
+    if (btn) btn.addEventListener('click', () => onDiscuss());
+    const reset = $('talk-reset');
+    if (reset) reset.addEventListener('click', () => resetTalk());
+    const composer = $('prompt-input');
+    if (composer) composer.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
+            e.preventDefault();
+            onDiscuss();
+        }
+    });
 
     const regen = $('regen-btn');
     if (regen) regen.addEventListener('click', () => onGenerate('again'));
@@ -1319,15 +1627,17 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const cancel = $('cancel-btn');
     if (cancel) cancel.addEventListener('click', () => {
-        if (abortCtrl) { abortCtrl.abort(); setStatus(mainI18n.t('status.cancelling')); }
+        if (!busy) return;
+        stopTalk();
+        setStatus(mainI18n.t('status.cancelled'));
     });
 
     // Esc — cancel the active request.
     document.addEventListener('keydown', e => {
         if (e.key === 'Escape' && busy && abortCtrl) {
             e.preventDefault();
-            abortCtrl.abort();
-            setStatus(mainI18n.t('status.cancelling'));
+            stopTalk();
+            setStatus(mainI18n.t('status.cancelled'));
         }
     });
 
@@ -1399,5 +1709,6 @@ document.addEventListener('exactfill:localechange', () => {
     renderCache();
     renderRefs();
     renderUsage();
+    renderTalk();
     refreshPlanLine();
 });

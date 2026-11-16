@@ -47,11 +47,16 @@
     <div id="main" class="panel-scroll">
         <section class="primary-workflow">
         <div class="field-head">
-            <label class="field-title" data-i18n="prompt.label">What should change?</label>
+            <label class="field-title" data-i18n="talk.label">Bạn muốn sửa gì?</label>
+            <button type="button" class="mini-btn" data-i18n="talk.reset">Cuộc mới</button>
             <span id="prompt-count" class="char-count near">9412 / 10000</span>
         </div>
-        <textarea id="prompt-input" maxlength="10000" data-i18n-placeholder="prompt.placeholder"
-                  placeholder="Describe the change in the selected area"></textarea>
+        <div class="talk-log" role="log" tabindex="0"></div>
+        <div class="talk-compose">
+        <textarea id="prompt-input" maxlength="10000" data-i18n-placeholder="talk.placeholder"
+                  placeholder="Mô tả phần cần sửa trong vùng đã chọn"></textarea>
+        <button type="button" class="action-btn primary-btn" data-i18n="talk.send">Gửi</button>
+        </div>
         <div class="control-grid">
         <div class="control-stack">
             <label class="field-title" data-i18n="field.provider">Provider</label>
@@ -79,7 +84,7 @@
             <span class="plan-copy"><strong data-i18n="plan.readyTitle">Ready to generate</strong><span>Request: 1024×1024 · input PNG · selection 1024×1024</span></span>
         </div>
         <div class="action-group">
-            <div class="row gen-row"><button class="action-btn primary-btn grow"><svg viewBox="0 0 20 20"><path d="M10 2.8l1.1 3.1L14.2 7l-3.1 1.1L10 11.2 8.9 8.1 5.8 7l3.1-1.1L10 2.8z"></path></svg><span data-i18n="action.generate">Generate</span></button></div>
+            <div class="row gen-row"></div>
             <button class="action-btn secondary-btn regen-btn" disabled data-i18n="action.regenerate">Regenerate</button>
         </div>
         </section>

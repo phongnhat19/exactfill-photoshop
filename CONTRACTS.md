@@ -211,12 +211,37 @@ host.app PS, minVersion "25.0.0"      ← doc.selection.bounds/.solid since 25.0
 manifestVersion 5
 requiredPermissions.localFileSystem: "request"
 requiredPermissions.network.domains: ["https://api.openai.com",
-                                      "https://generativelanguage.googleapis.com"]
+                                      "https://generativelanguage.googleapis.com",
+                                      "https://api.wavespeed.ai",
+                                      "https://openrouter.ai"]
   ← WITHOUT http://localhost:3000 (it was in the old manifest for no reason)
 entrypoints: one panel, icons/openai.svg
 ```
 
 ---
+
+## `providers/wavespeed.js` — WaveSpeedAI
+
+Registry id `wavespeed`, secureStorage name `wavespeedApiKey`. `generate` returns
+`{ images: [base64], usage: null }`. It uploads with `POST /api/v3/media/upload/binary`,
+submits the selected edit model once, then polls `GET /api/v3/predictions/{id}/result`.
+Fetch goes only to `https://api.wavespeed.ai`. It does not use `providers/http.js`
+or the curl transport. Capture and placement are unchanged.
+
+## Edit conversation
+
+The primary control is a Vietnamese multi-turn discussion, not a one-shot Generate
+button. The transcript lives in memory until **Cuộc mới**. OpenRouter key
+`openrouterApiKey` is stored in `secureStorage`.
+
+1. `google/gemini-3.8-flash` via `POST https://openrouter.ai/api/v1/chat/completions`
+   maintains the brief and, only when needed, a Vietnamese question.
+2. `heygen/heygen-decision-1-turbo` via `POST https://openrouter.ai/api/alpha/decisions`
+   sees the selected image, surrounding context, original conversation and proposed brief.
+3. Choice `ready` generates once with the selected image provider. `clarify`,
+   `cancelled`, a malformed payload, a refusal or an API error does not.
+4. Cancel, reset, or a changed document, layer or selection invalidates that turn
+   before the paid generation.
 
 ## Style
 

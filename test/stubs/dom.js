@@ -107,6 +107,16 @@ class El {
         return node;
     }
 
+    focus() {
+        let root = this;
+        while (root.parentNode) root = root.parentNode;
+        root.activeElement = this;
+    }
+    dispatchEvent(ev) {
+        const type = ev && ev.type;
+        for (const fn of (this.listeners[type] || []).slice()) fn(ev);
+        return true;
+    }
     addEventListener(type, fn) { (this.listeners[type] = this.listeners[type] || []).push(fn); }
     removeEventListener(type, fn) {
         const l = this.listeners[type];
@@ -174,7 +184,7 @@ function buildFromHtml(html) {
 
 const photoshopStub = {
     app: { activeDocument: null, documents: [] },
-    core: { executeAsModal: async fn => fn({}, {}) },
+    core: { executeAsModal: async fn => fn({}, {}), showAlert: async () => {} },
     action: {
         batchPlay: async () => [{}],
         addNotificationListener: () => { throw new Error('no notifications in the stub'); },
@@ -184,6 +194,15 @@ const photoshopStub = {
 const uxpStub = {
     storage: {
         formats: { utf8: 'utf8', binary: 'binary' },
+        secureStorage: {
+            async getItem(key) {
+                if (!this._map.has(key)) throw new Error('not found');
+                return this._map.get(key);
+            },
+            async setItem(key, value) { this._map.set(key, String(value)); },
+            async removeItem(key) { this._map.delete(key); },
+            _map: new Map(),
+        },
         localFileSystem: {
             getTemporaryFolder: async () => { throw new Error('no filesystem in the stub'); },
             getFileForOpening: async () => null,

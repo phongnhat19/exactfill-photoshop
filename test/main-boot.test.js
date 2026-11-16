@@ -39,13 +39,39 @@ test('the provider and model lists really reach the DOM', async () => {
     assert.ok(provider.querySelectorAll('sp-menu-item').length > 0,
         'the provider picker must not stay empty');
 
+    const names = provider.querySelectorAll('sp-menu-item').map(c => c.getAttribute('value'));
+    assert.deepEqual(names, ['wavespeed', 'openai', 'google']);
+
     const model = doc.getElementById('model-select');
     const ids = model.querySelectorAll('sp-menu-item').map(c => c.getAttribute('value'));
     // This is why the two awaits in refreshModels are separate: without an API
     // key the list must arrive from the built-in one, not leave the picker empty.
-    assert.ok(ids.includes('gpt-image-2.5-sunburst'),
-        `the new model must be in the list, and there we have: ${ids.join(', ')}`);
+    assert.deepEqual(ids, [
+        'google/nano-banana-2/edit',
+        'google/nano-banana-pro/edit',
+        'bytedance/seedream-v5.5/edit',
+        'wavespeed-ai/qwen-image-2.0/edit',
+    ]);
+    assert.equal(store.get('ai_provider'), 'wavespeed');
     assert.ok(ids.includes(store.get('ai_model')), 'the saved model must be among the items');
+});
+
+test('a fresh WaveSpeed selection shows no invented price and no request mask', async () => {
+    await booted;
+    assert.equal(doc.getElementById('transparent-bg').disabled, true);
+    assert.equal(doc.getElementById('live-preview').disabled, true);
+    assert.equal(doc.getElementById('ignore-pixels').disabled, true);
+    await withSelection(15);
+    assert.match(planLine(), /cost unavailable/);
+    assert.doesNotMatch(planLine(), /\$/);
+    assert.doesNotMatch(planLine(), /with mask/);
+
+    const model = doc.getElementById('model-select');
+    model.value = 'bytedance/seedream-v5.5/edit';
+    model.fire('change', { target: { value: 'bytedance/seedream-v5.5/edit' } });
+    assert.equal(doc.getElementById('transparent-bg').disabled, false,
+        'Seedream is the only WaveSpeed model with a transparent background');
+    assert.equal(doc.getElementById('live-preview').disabled, true);
 });
 
 test('quality levels follow the model capabilities, not the name', async () => {
@@ -53,7 +79,18 @@ test('quality levels follow the model capabilities, not the name', async () => {
     const seg = doc.getElementById('quality-toggle');
     const levels = () => seg.querySelectorAll('.seg-btn').map(b => b.dataset.value);
 
-    // gpt-image-2.5 is selected first: it has the extended levels
+    assert.deepEqual(levels(), ['low', 'medium', 'high', 'auto'],
+        'WaveSpeed edit models use the classic quality ladder');
+
+    const provider = doc.getElementById('provider-select');
+    provider.value = 'openai';
+    provider.fire('change', { target: { value: 'openai' } });
+    for (let i = 0; i < 20; i++) {
+        await new Promise(r => setTimeout(r, 5));
+        if (store.get('ai_model') === 'gpt-image-2.5-sunburst') break;
+    }
+
+    // gpt-image-2.5 is the OpenAI default: it has the extended levels
     assert.deepEqual(levels(), ['low', 'medium', 'high', 'xhigh', 'max', 'auto'],
         '2.5 must have xhigh and max');
     assert.ok(seg.classList.contains('seg-wrap'),

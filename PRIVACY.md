@@ -14,9 +14,17 @@ ExactFill has no account system, analytics, telemetry or application server.
 
 ## Data sent to AI providers
 
-When you generate an image, ExactFill sends the prompt, selected image pixels,
-optional surrounding context and any reference images directly to the provider
-you selected: OpenAI or Google. Their privacy policies and API data controls apply.
+When you describe an edit, ExactFill sends that conversation and the selected
+image, including surrounding context, to OpenRouter at `openrouter.ai`. The
+transcript is kept only in memory and is cleared when you start a new discussion.
+It is not written to local storage.
+
+When the request is ready and an image is generated, ExactFill sends the edit
+brief, selected image pixels, optional surrounding context and any reference
+images directly to the provider you selected: WaveSpeedAI, OpenAI or Google.
+Their privacy policies and API data controls apply.
+WaveSpeed requests go only to `api.wavespeed.ai`. The plugin does not download
+generation results from other output links.
 
 ExactFill does not send API keys, prompts, documents or images to its developer.
 The plugin does not add hidden tracking requests.

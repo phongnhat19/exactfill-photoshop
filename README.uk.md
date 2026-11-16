@@ -5,7 +5,7 @@
 Exact AI edits, placed exactly in the selected area.
 
 ExactFill is a free, open-source Photoshop plugin that connects directly to
-OpenAI and Google Gemini with your own API keys. Select an area, describe the
+WaveSpeedAI, OpenAI and Google Gemini with your own API keys. Select an area, describe the
 change, and get the result back as a precisely placed Smart Object with a
 native Photoshop layer mask.
 
@@ -25,7 +25,7 @@ uses a real selection and shows the result as a precisely placed layer.
 - Precise placement in the original selection, including odd and fractional bounds.
 - A non-destructive Smart Object and a native Photoshop layer mask.
 - RGB, CMYK, Grayscale, and Lab; 8/16/32-bit documents are not converted.
-- OpenAI GPT Image (including GPT Image 2.5) and Google Gemini in one panel.
+- WaveSpeedAI, OpenAI GPT Image (including GPT Image 2.5) and Google Gemini in one panel.
 - Edge blending, context, references, a transparent background, and lossless input.
 - OpenAI intermediate frames when the API and UXP support a streaming response.
 - Persistent cost statistics, history, presets, and a local result cache.
@@ -60,17 +60,21 @@ build, replace its old `AiImagePS` folder instead of keeping both copies.
 ## First run
 
 1. Open a document and make a selection.
-2. Choose OpenAI or Google Gemini and paste that provider's API key.
-3. Describe the change you want and press **Generate**.
-4. Review the new Smart Object and adjust its mask if needed.
+2. In Settings, paste an OpenRouter API key for the edit conversation.
+   Settings is available before a key is saved.
+3. Choose WaveSpeedAI, OpenAI or Google Gemini and paste that provider's API key.
+   A new install starts on WaveSpeedAI.
+4. Describe the change in the conversation. A clear request generates immediately.
+5. Review the new Smart Object and adjust its mask if needed.
 
-API keys are stored through Photoshop UXP `secureStorage`. The selected pixels,
-the prompt, and extra references are sent directly to the selected provider. See the
+API keys are stored through Photoshop UXP `secureStorage`. The conversation and
+selected image go to OpenRouter. The edit brief, selected pixels, and extra
+references then go to the selected provider. See the
 [privacy policy](PRIVACY.md) for details.
 
 ## Cost
 
-ExactFill is free. OpenAI and Google may charge for API use. The plugin keeps a
+ExactFill is free. WaveSpeedAI, OpenAI and Google may charge for API use. The plugin keeps a
 local ledger and shows an estimated USD cost when the API response has enough
 data. Prices and model availability can change; the provider's bill is always
 final.
@@ -79,7 +83,7 @@ final.
 
 - Adobe Photoshop 2024 or newer (`25.0+`).
 - Windows and macOS use the same plugin.
-- An internet connection and an API key for the selected provider are required.
+- An internet connection, an OpenRouter key, and an API key for the selected image provider are required.
 - Final behavior on Windows should be checked in a real Photoshop on Windows.
 
 ### Firewalls and proxies
@@ -88,6 +92,8 @@ ExactFill connects to the provider directly from Photoshop/UXP over HTTPS. If a
 firewall, proxy, or security policy restricts Photoshop, allow outbound TCP
 port 443 to the domain of the provider you need:
 
+- OpenRouter (edit conversation): `openrouter.ai`
+- WaveSpeedAI: `api.wavespeed.ai`
 - OpenAI: `api.openai.com`
 - Google Gemini: `generativelanguage.googleapis.com`
 

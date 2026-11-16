@@ -18,13 +18,13 @@ trap cleanup EXIT
 mkdir -p "$DIST" "$BUILD_ROOT/ExactFill/icons" "$BUILD_ROOT/ExactFill/providers"
 
 ROOT_FILES=(
-    app-info.js auth.js cache.js capture.js geometry.js history.js i18n.js
+    app-info.js auth.js cache.js capture.js conversation.js geometry.js history.js i18n.js
     index.html layer-tree.js ledger.js main.js manifest.json place.js png.js presets.js
     public-ui.js storage-keys.js panel-settings.js style.css ui-dom.js usage.js
 )
 PROVIDER_FILES=(
     providers/curl-transport.js providers/google.js providers/http.js
-    providers/index.js providers/openai.js
+    providers/index.js providers/openai.js providers/openrouter.js providers/wavespeed.js
 )
 PANEL_ICON_FILES=(
     panel-dark@1x.png panel-dark@2x.png panel-light@1x.png panel-light@2x.png
