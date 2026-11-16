@@ -3,3 +3,6 @@ node_modules/
 debug_logs/
 *.log
 dist/
+.nda-harness/tasks/
+.nda-harness/profile.json
+.nda-harness/skill-selection/
