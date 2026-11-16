@@ -18,7 +18,7 @@ test('network failure names the blocked host and firewall action', async () => {
     }
 });
 
-test('parseSse читає OpenAI image events з LF', () => {
+test('parseSse reads OpenAI image events with LF', () => {
     const events = parseSse(
         'event: image_edit.partial_image\n' +
         'data: {"type":"image_edit.partial_image","b64_json":"one","partial_image_index":0}\n\n' +
@@ -31,7 +31,7 @@ test('parseSse читає OpenAI image events з LF', () => {
     ]);
 });
 
-test('parseSse не буферизує CRLF і пропускає DONE', () => {
+test('parseSse does not buffer CRLF and skips DONE', () => {
     const events = parseSse(
         'event: image_generation.partial_image\r\n' +
         'data: {"type":"image_generation.partial_image","b64_json":"one","partial_image_index":0}\r\n\r\n' +
@@ -41,7 +41,7 @@ test('parseSse не буферизує CRLF і пропускає DONE', () => {
     assert.equal(events[0].b64_json, 'one');
 });
 
-test('requestStream віддає partial до completed навіть коли подію розрізано між чанками', async () => {
+test('requestStream yields partial before completed even when an event is split across chunks', async () => {
     const originalFetch = global.fetch;
     const chunks = [
         'event: image_edit.partial_image\r\ndata: {"type":"image_edit.partial_',
@@ -68,14 +68,14 @@ test('requestStream віддає partial до completed навіть коли п
     }
 });
 
-test('Retry-After читає і секунди, і HTTP-дату', () => {
+test('Retry-After reads both seconds and an HTTP date', () => {
     const now = Date.UTC(2026, 7, 11, 12, 0, 0);
     assert.equal(parseRetryAfter('12', now), 12);
     assert.equal(parseRetryAfter(new Date(now + 9000).toUTCString(), now), 9);
     assert.equal(parseRetryAfter('n/a', now), null);
 });
 
-test('скасування перериває довге очікування ретраю одразу', async () => {
+test('cancellation interrupts a long retry wait immediately', async () => {
     const ctrl = new AbortController();
     const started = Date.now();
     const pending = withRetry(async () => {
@@ -83,5 +83,5 @@ test('скасування перериває довге очікування р
     }, { tries: 3, signal: ctrl.signal });
     setTimeout(() => ctrl.abort(), 20);
     await assert.rejects(pending, e => e && e.cancelled === true);
-    assert.ok(Date.now() - started < 1000, 'скасування не має чекати Retry-After');
+    assert.ok(Date.now() - started < 1000, 'cancellation must not wait for Retry-After');
 });

@@ -5,7 +5,7 @@ const { isolateLayerTree } = require('../layer-tree.js');
 
 const layer = (id, children) => ({ id, visible: true, ...(children ? { layers: children } : {}) });
 
-test('ізолює вкладений активний шар, зберігаючи його предків', () => {
+test('isolates a nested active layer, keeping its ancestors', () => {
     const keep = layer(4);
     const sibling = layer(3);
     const group = layer(2, [sibling, keep]);
@@ -18,7 +18,7 @@ test('ізолює вкладений активний шар, зберігаю�
     assert.equal(keep.visible, true);
 });
 
-test('активна група лишає видимим увесь власний вміст', () => {
+test('an active group leaves all of its own contents visible', () => {
     const child = layer(3);
     const group = layer(2, [child]);
     const outside = layer(1);
@@ -29,7 +29,7 @@ test('активна група лишає видимим увесь власн�
     assert.equal(child.visible, true);
 });
 
-test('повідомляє, коли активного шару в дереві немає', () => {
+test('reports when the active layer is not in the tree', () => {
     const layers = [layer(1), layer(2, [layer(3)])];
     assert.equal(isolateLayerTree(layers, 99), false);
     assert.deepEqual(layers.map(item => item.visible), [false, false]);

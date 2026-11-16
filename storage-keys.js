@@ -1,19 +1,20 @@
 /* ============================================================================
- *  storage-keys.js — ЄДИНЕ місце, де оголошені ключі localStorage.
+ *  storage-keys.js — the ONLY place localStorage keys are declared.
  *
- *  ⚠️ НАВІЩО ОКРЕМИЙ ФАЙЛ. До нього `ai_provider` був написаний рядковим
- *  літералом у пʼяти файлах: main.js, auth.js, i18n.js і шість разів у
- *  public-ui.js. Перейменування ключа в одному місці НЕ ламало панель — вона
- *  просто починала читати інший ключ. Ламався звіт про ваду: у діагностиці
- *  зʼявлялось «Provider: unknown», і причину довелося б шукати в останню чергу.
- *  Класична тиха розбіжність, на які цей плагін уже наступав (те саме було з
- *  presetManager.load() і з buildCommand).
+ *  Why a separate file. Before it, `ai_provider` was a string literal in five
+ *  files: main.js, auth.js, i18n.js, and six times in public-ui.js. Renaming
+ *  the key in one place did NOT break the panel — it simply started reading a
+ *  different key. What broke was the bug report: diagnostics showed
+ *  "Provider: unknown", and the cause would have been the last place anyone
+ *  looked. A classic silent mismatch this plugin has already hit (the same
+ *  thing happened with presetManager.load() and with buildCommand).
  *
- *  Модуль навмисно БЕЗ ЖОДНОЇ залежності: його тягнуть і i18n.js, і auth.js, і
- *  public-ui.js — усе, що завгодно, тільки не цикл.
+ *  The module is deliberately dependency-free: i18n.js, auth.js and
+ *  public-ui.js all load it — anything is fine except a cycle.
  *
- *  Префікс `ai_` і назви лишаються як є: у користувачів уже збережені
- *  налаштування під цими іменами, і перейменування стерло б їх мовчки.
+ *  The `ai_` prefix and the names stay as they are: users already have
+ *  settings saved under these names, and renaming them would wipe that
+ *  silently.
  * ========================================================================== */
 
 const LS = {
@@ -31,14 +32,14 @@ const LS = {
     usage: 'ai_usage_ledger_v1',
     transport: 'ai_transport',
     cache: 'ai_result_cache_v1',
-    locale: 'exactfill_locale',   // без префікса ai_ — так воно вже збережено в користувачів
+    locale: 'exactfill_locale',   // no ai_ prefix — already saved that way for users
 };
 
-/** Ключі, які плагін лише ПРИБИРАЄ. Тримаємо їх тут, щоб не завести повторно. */
+/** Keys the plugin only REMOVES. Kept here so they are not reintroduced. */
 const LEGACY = {
-    sessionUsage: 'ai_session_usage',      // журнал сесії, витіснений LS.usage
-    presets: 'googleAiPresets',            // спадок форку, лишився через збережені пресети
-    history: 'nanobanana_prompt_history',  // те саме
+    sessionUsage: 'ai_session_usage',      // session ledger, replaced by LS.usage
+    presets: 'googleAiPresets',            // fork leftover, kept because presets are saved
+    history: 'nanobanana_prompt_history',  // same
 };
 
 module.exports = { LS, LEGACY };

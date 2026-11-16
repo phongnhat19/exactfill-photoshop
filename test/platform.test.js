@@ -8,23 +8,23 @@ const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, 'manifest.json'), 'u
 const pkg = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 const appInfo = require('../app-info.js');
 
-/* ⚠️ СПИСОК ВИВОДИТЬСЯ З ФАЙЛОВОЇ СИСТЕМИ, А НЕ ПИШЕТЬСЯ РУКАМИ.
-   Раніше це був літерал — і новий модуль просто не існував для жодної з
-   перевірок нижче: ні для «нема абсолютних шляхів», ні для «місток лише в
-   одному модулі», ні (найгірше) для «білд не забув жодного файлу». Тобто
-   можна було додати модуль, зібрати реліз без нього й отримати зелені тести
-   при непрацездатному ZIP. Тепер новий файл автоматично потрапляє під усі
-   гейти, а білд доводиться оновити — бо інакше тест впаде. */
+/* THE LIST IS DERIVED FROM THE FILE SYSTEM, NOT WRITTEN BY HAND.
+   It used to be a literal — and a new module simply did not exist for any of
+   the checks below: neither "no absolute paths", nor "the bridge in only one
+   module", nor (worst) "the build forgot no file". So you could add a module,
+   build a release without it and get green tests on a ZIP that does not work.
+   Now a new file automatically falls under every gate, and the build has to
+   be updated — because otherwise the test fails. */
 const runtimeFiles = [
     ...fs.readdirSync(ROOT).filter(f => f.endsWith('.js')),
     ...fs.readdirSync(path.join(ROOT, 'providers'))
         .filter(f => f.endsWith('.js')).map(f => `providers/${f}`),
 ].sort();
 
-// Єдиний файл, якому нативні шляхи потрібні по суті задачі: щоб зібрати команду
-// для системної оболонки. Файли створює сам UXP у своїй тимчасовій папці, тому
-// читання й прибирання йдуть через ті самі Entry. Вставка в документ як раніше —
-// через session token, і цей виняток на неї не поширюється.
+// The only file that needs native paths by the nature of the task: to build a
+// command for the system shell. UXP itself creates the files in its temp folder,
+// so reading and cleanup go through those same Entry objects. Insertion into the
+// document stays as before — through a session token, and this exception does not cover it.
 const NATIVE_PATH_ALLOWED = new Set(['providers/curl-transport.js']);
 
 test('public metadata and manifest stay aligned', () => {
@@ -75,80 +75,80 @@ test('runtime contains no absolute platform-specific paths', () => {
 
 test('the curl transport keeps its dangerous parts contained', () => {
     const source = fs.readFileSync(path.join(ROOT, 'providers/curl-transport.js'), 'utf8');
-    // ключ живе лише у файлі --config: аргументи процесу видно в ps(1)
+    // the key lives only in the --config file: process arguments are visible in ps(1)
     assert.match(source, /data-binary = /);
     assert.doesNotMatch(source, /Authorization[^\n]*\+/, 'no key concatenated into a command');
-    // шлях до curl мусить обчислюватись у згенерованому скрипті, не бути вбитим тут
+    // the path to curl must be computed in the generated script, not hardcoded here
     assert.match(source, /getenv\("SystemRoot"\)/);
     assert.doesNotMatch(source, /\/usr\/local\/bin\/curl/);
-    // тільки транспорт має право говорити з ExtendScript-містком
+    // only the transport may talk to the ExtendScript bridge
     for (const file of runtimeFiles.filter(f => f !== 'providers/curl-transport.js')) {
         assert.doesNotMatch(fs.readFileSync(path.join(ROOT, file), 'utf8'),
             /AdobeScriptAutomation Scripts/, `${file}: bridge use must stay in one module`);
     }
-    // place.js досі вставляє через токен, а не через шлях
+    // place.js still inserts through a token, not through a path
     assert.doesNotMatch(fs.readFileSync(path.join(ROOT, 'place.js'), 'utf8'), /\.nativePath\b/);
 });
 
 test('a request mask is never paired with a non-PNG input', () => {
-    // OpenAI: «the source image and the mask must share the same format and
-    // dimensions». Сервер розбіжність не відхиляє — він тихо ігнорує маску, і
-    // модель перемальовує весь кадр. Симптом: «модель не бачить виділення».
+    // OpenAI: "the source image and the mask must share the same format and
+    // dimensions". The server does not reject a mismatch — it quietly ignores the
+    // mask, and the model repaints the whole frame. Symptom: "the model does not see the selection".
     const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
     const capture = fs.readFileSync(path.join(ROOT, 'capture.js'), 'utf8');
     const png = fs.readFileSync(path.join(ROOT, 'png.js'), 'utf8');
 
-    // рішення про маску мусить ухвалюватись ДО захоплення й керувати форматом
+    // the mask decision must be made BEFORE capture and must control the format
     assert.match(main, /captureRegion\(ctx, s\.layerOnly, s\.lossless, wantMask\)/);
-    /* ⚠️ І воно мусить лишатись в ОДНОМУ місці. Доки формула жила двічі —
-       окремо в картці плану, окремо в capturePayload — вони розійшлись, і
-       картка обіцяла JPEG там, де летів PNG (виміряно в хості 2026-09-09).
-       Гейт саме на кількість збігів: другий рядок із цією формулою і є рецидив. */
+    /* And it must stay in ONE place. While the formula lived twice — once in
+       the plan card, once in capturePayload — they diverged, and the card
+       promised JPEG where PNG was sent (measured on the host 2026-09-09).
+       The gate is on the number of matches: a second line with this formula is the relapse. */
     assert.equal((main.match(/provider\.supportsMask && s\.padPercent > 0/g) || []).length, 1,
-        'формула wantMask мусить існувати рівно один раз — у inputPlan');
+        'the wantMask formula must exist exactly once — in inputPlan');
     assert.match(main, /function inputPlan\(s, provider, ctx\)/);
     assert.match(main, /const \{ wantMask \} = inputPlan\(s, provider, ctx\);/,
-        'capturePayload бере рішення з inputPlan');
+        'capturePayload takes the decision from inputPlan');
     assert.match(main, /const io = inputPlan\(s, provider, ctx\);/,
-        'картка плану бере рішення з того самого inputPlan');
-    // Останній рубіж переїхав у capture.maskForRequest — там він перевіряється
-    // поведінкою (test/mask-blend.test.js), а не текстом. Тут лишається гейт на
-    // те, що main.js не будує маску повз цю функцію.
+        'the plan card takes the decision from the same inputPlan');
+    // The last line moved into capture.maskForRequest — it is checked there by
+    // behavior (test/mask-blend.test.js), not by text. What remains here is a gate
+    // that main.js does not build a mask past that function.
     assert.match(capture, /input\.type !== 'image\/png'[\s\S]{0,200}reason:/);
     assert.match(main, /capture\.maskForRequest\(/);
     assert.doesNotMatch(main, /buildRectMaskPng\(/,
-        'маску будує лише capture.maskForRequest — інакше інваріант обходиться');
-    // Поріг швидкості не має права деградувати ФОРМАТ — лише перемикати
-    // виконавця. `lossless` тому const: жоден рядок нижче не може тихо
-    // переписати його на JPEG ні коли PNG обов'язковий через маску, ні коли
-    // користувач просто поставив галку «вхід без втрат».
+        'only capture.maskForRequest builds the mask — otherwise the invariant is bypassed');
+    // The speed threshold must not be allowed to degrade the FORMAT — only to
+    // switch the worker. `lossless` is therefore const: no line below can quietly
+    // rewrite it to JPEG, neither when PNG is required because of a mask, nor when
+    // the user simply checked "lossless input".
     assert.match(capture, /const lossless = wantLossless \|\| requirePng;/);
     assert.doesNotMatch(capture, /\blossless = false\b/,
-        'поріг не має права скасовувати вибір формату');
+        'the threshold must not be allowed to cancel the format choice');
     assert.match(capture, /const viaDuplicateOnly = lossless && w \* h > LOSSLESS_MAX_PX;/);
-    // маска — RGBA (тип 6), як у прикладі документації
+    // the mask is RGBA (type 6), as in the documentation example
     assert.match(png, /encodePng\(px, width, height, 4\)/);
 });
 
-test('кожне поле вводу оголошує maxlength — інакше UXP мовчки глушить його на ~256 символах', () => {
-    // Виміряно в хості, не виведено з документації: поле UXP без ЯВНОГО
-    // maxlength приблизно на 256 символах просто перестає приймати введення.
-    // Ні помилки, ні обрізаного хвоста, ні події — промпт мовчки виявлявся
-    // коротшим за написаний. Adobe цього ніде не документує, тож єдиний захист
-    // від повернення бага — цей гейт.
+test('every input field declares maxlength — otherwise UXP silently silences it at ~256 characters', () => {
+    // Measured on the host, not derived from the docs: a UXP field without an
+    // EXPLICIT maxlength simply stops accepting input at about 256 characters.
+    // No error, no truncated tail, no event — the prompt silently turned out
+    // shorter than what was written. Adobe documents this nowhere, so the only
+    // protection against the bug coming back is this gate.
     for (const file of ['index.html', 'test/ui-harness.html']) {
         const html = fs.readFileSync(path.join(ROOT, file), 'utf8');
         const tags = html.match(/<(?:textarea|sp-textfield)\b[^>]*>/g) || [];
-        assert.ok(tags.length, `${file}: полів вводу не знайдено — тест утратив предмет`);
+        assert.ok(tags.length, `${file}: no input fields found — the test lost its subject`);
         for (const tag of tags) {
             assert.match(tag, /\smaxlength="\d+"/,
-                `${file}: поле без maxlength → ${tag.slice(0, 70)}`);
+                `${file}: a field without maxlength → ${tag.slice(0, 70)}`);
         }
-        // rows= в UXP не діє взагалі (офіційний перелік відомих проблем):
-        // висоту задає лише CSS, а атрибут у розмітці вводив би в оману
-        assert.doesNotMatch(html, /<textarea[^>]*\srows=/, `${file}: rows у UXP нічого не робить`);
+        // rows= does nothing at all in UXP (the official list of known issues):
+        // only CSS sets the height, and the attribute in the markup would mislead
+        assert.doesNotMatch(html, /<textarea[^>]*\srows=/, `${file}: rows does nothing in UXP`);
     }
-    // нову межу видно користувачеві, а не лише коду
+    // the new limit is visible to the user, not only to the code
     const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
     assert.match(main, /function updateCharCount\(/);
     assert.match(main, /updateCharCount\('prompt-input', 'prompt-count'\)/);
@@ -216,8 +216,8 @@ test('critical panel controls use deterministic UXP-safe markup', () => {
 
 test('macOS development deploy excludes non-runtime content', () => {
     const sh = fs.readFileSync(path.join(ROOT, 'deploy.sh'), 'utf8');
-    // docs/ — це сайт проєкту з демо-відео на ~1 МБ. Photoshop сканує Plug-ins
-    // при кожному старті, тому все, що не є рантаймом, туди не їде.
+    // docs/ is the project site with a demo video of ~1 MB. Photoshop scans Plug-ins
+    // on every start, so anything that is not runtime does not go there.
     for (const nonRuntime of ['INSTALL.txt', 'README.md', 'README.uk.md', 'package.json',
                               'LICENSE', 'PRIVACY.md', '.github', 'scripts', 'dist', 'docs']) {
         assert.match(sh, new RegExp(`--exclude '${nonRuntime.replace('.', '\\.')}'`));
@@ -230,14 +230,14 @@ test('macOS development deploy excludes non-runtime content', () => {
 });
 
 test('deploy target matches the installed plugin folder', () => {
-    // Скрипт довго вказував на AiImagePS — назву з часів до перейменування.
-    // Photoshop від цього не падає, і саме тому баг жив: замість оновити робочу
-    // папку деплой мовчки створював поруч ДРУГУ копію з тим самим manifest id.
+    // The script pointed at AiImagePS for a long time — the name from before the rename.
+    // Photoshop does not crash because of that, and that is why the bug lived: instead of
+    // updating the working folder, deploy silently created a SECOND copy next to it with the same manifest id.
     const sh = fs.readFileSync(path.join(ROOT, 'deploy.sh'), 'utf8');
     const dest = sh.match(/^DEST="([^"]+)"/m);
-    assert.ok(dest, 'deploy.sh має оголошувати DEST');
+    assert.ok(dest, 'deploy.sh must declare DEST');
     assert.equal(dest[1].split('/').pop(), manifest.name,
-        'папка призначення мусить збігатися з manifest.name');
+        'the destination folder must match manifest.name');
 });
 
 test('one universal guide documents manual installation on both platforms', () => {
@@ -285,71 +285,71 @@ test('GitHub Sponsor button points to the ExactFill Ko-fi page', () => {
     assert.equal(funding.trim(), 'ko_fi: havryil89140');
 });
 
-test('сегментний перемикач якості кладе шість рівнів у два ряди по три', () => {
-    /* ⚠️ ВИМІРЯНО В ХОСТІ, НЕ В БРАУЗЕРІ. У браузерному стенді flex-basis
-       33.333 % давав рівно три кнопки в ряду. У Photoshop 27.5.0 ті самі три
-       переповнювали рядок на кілька пікселів і лягали ПО ДВІ — три ряди замість
-       двох. Причина: у .seg-btn немає box-sizing: border-box (глобального
-       правила у файлі теж немає), тому border-right: 1px додається до базису.
+test('the quality segmented control puts six levels in two rows of three', () => {
+    /* MEASURED ON THE HOST, NOT IN A BROWSER. In the browser stand a flex-basis
+       of 33.333% gave exactly three buttons in a row. In Photoshop 27.5.0 the same
+       three overflowed the row by a few pixels and landed TWO at a time — three
+       rows instead of two. Cause: .seg-btn has no box-sizing: border-box (there is
+       no global rule in the file either), so border-right: 1px is added to the basis.
 
-       Гейт на обидві половини причини: box-sizing і базис із запасом. */
+       The gate covers both halves of the cause: box-sizing and a basis with margin. */
     const css = fs.readFileSync(path.join(ROOT, 'style.css'), 'utf8');
     const segBtn = css.slice(css.indexOf('.seg-btn {'), css.indexOf('.seg-btn:last-child'));
     assert.match(segBtn, /box-sizing:\s*border-box/,
-        'border-right інакше додається до flex-basis');
+        'otherwise border-right is added to flex-basis');
 
     const basis = css.match(/\.seg-wrap \.seg-btn \{[^}]*flex:\s*1\s+1\s+([\d.]+)%/);
-    assert.ok(basis, 'flex-basis рядів мусить лишатись у відсотках, щоб не залежати від ширини');
+    assert.ok(basis, 'the row flex-basis must stay in percent, so it does not depend on the width');
     const pct = Number(basis[1]);
     assert.ok(pct * 3 <= 100 && pct * 4 > 100,
-        `базис ${pct}%: три кнопки мусять влазити (${pct * 3}% ≤ 100), а четверта — ні (${pct * 4}% > 100)`);
+        `basis ${pct}%: three buttons must fit (${pct * 3}% ≤ 100), and a fourth must not (${pct * 4}% > 100)`);
 });
 
-test('уточнення прив’язане до геометрії того запуску, який уточнює', () => {
-    /* ⚠️ НАЙДОРОЖЧА ПОМИЛКА ЦЬОГО МАРШРУТУ була б тиха. «Перегенерувати»
-       навмисно перечитує повзунок контексту ЗАРАЗ (див. resolveRegion). Якби
-       «Уточнити» робило те саме, плитка, намальована для кадру 1315×611, лягла
-       б у кадр 1920×391 — і вставка мовчки розтягнула б чужу картинку.
-       Тому гейт саме на джерело координат: lastRun, а не readSettings. */
+test('refine is bound to the geometry of the run it refines', () => {
+    /* THE MOST EXPENSIVE BUG ON THIS ROUTE would be a silent one. Regenerate
+       deliberately rereads the context slider NOW (see resolveRegion). If Refine
+       did the same, a tile painted for a 1315×611 frame would land in a 1920×391
+       frame — and insertion would silently stretch the wrong picture.
+       So the gate is on the source of the coordinates: lastRun, not readSettings. */
     const main = fs.readFileSync(path.join(ROOT, 'main.js'), 'utf8');
     const body = main.slice(main.indexOf('async function runRefine('),
                             main.indexOf('async function onGenerate('));
-    assert.ok(body, 'runRefine мусить існувати окремо від onGenerate');
+    assert.ok(body, 'runRefine must exist separately from onGenerate');
     assert.match(body, /ctx:\s*lastRun\.ctx,\s*target:\s*lastRun\.target/,
-        'кадр уточнення береться з минулого запуску');
+        'the refine frame is taken from the previous run');
     assert.doesNotMatch(body, /expandForContext|resolveRegion/,
-        'перерахунок кадру за поточними налаштуваннями — саме той баг, від якого гейт');
+        'recomputing the frame from the current settings is exactly the bug this gate exists for');
 
-    // Ланка розмови: без responseId наступний хід почав би все спочатку й мовчки
-    // втратив би пам'ять — єдина причина, заради якої маршрут узагалі існує.
+    // The conversation link: without responseId the next turn would start over and
+    // silently lose memory — the only reason this route exists at all.
     assert.match(main, /responseId:\s*res\.responseId \|\| null/);
     assert.match(main, /previousResponseId:\s*lastRun\.responseId \|\| null/);
 
-    // Уточнення не переписує промпт: інакше «Перегенерувати» після нього
-    // повторило б репліку «зроби тінь м'якшою» по вихідних пікселях.
+    // Refine does not overwrite the prompt: otherwise Regenerate after it would
+    // repeat the line "make the shadow softer" against the original pixels.
     assert.match(main, /prompt:\s*refining \? lastRun\.prompt : prompt/);
 });
 
-test('формат відповіді зв’язаний із роздільністю у файлі, і зв’язка не рветься мовчки', () => {
-    /* ⚠️ Це гейт на ЗАЛЕЖНІСТЬ, а не на константу. Точна вставка стоїть на тому,
-       що place.js вписує в отриманий файл роздільність документа (pHYs у PNG,
-       JFIF density у JPEG), інакше placeEvent бере 72 ppi. З 2026-10-08 place.js
-       знає обидва формати, бо Gemini віддає лише JPEG. У WebP поля роздільності
-       не існує взагалі — тому OpenAI і далі просить формат ЯВНО в усіх трьох
-       маршрутах, і webp заборонено. */
+test('the response format is tied to the resolution in the file, and the tie does not break silently', () => {
+    /* This is a gate on the DEPENDENCY, not on a constant. Exact insertion rests
+       on place.js writing the document resolution into the received file (pHYs in
+       PNG, JFIF density in JPEG), otherwise placeEvent assumes 72 ppi. Since
+       2026-10-08 place.js knows both formats, because Gemini returns only JPEG.
+       WebP has no resolution field at all — so OpenAI still asks for the format
+       EXPLICITLY on all three routes, and webp is forbidden. */
     const openai = fs.readFileSync(path.join(ROOT, 'providers/openai.js'), 'utf8');
     assert.match(openai, /const OUTPUT_FORMAT = 'png';/);
-    // Три маршрути перелічені поіменно, а не полічені: лічильник збігів ламався б
-    // від кожної згадки в коментарі й привчав би правити тест замість коду.
+    // The three routes are named, not counted: a match counter would break on
+    // every mention in a comment and would train us to edit the test instead of the code.
     assert.match(openai, /\{ name: 'output_format', data: OUTPUT_FORMAT \}/, 'images/edits');
     assert.match(openai, /n: 1, output_format: OUTPUT_FORMAT/, 'images/generations');
     assert.match(openai, /type: 'image_generation', output_format: OUTPUT_FORMAT/, 'responses');
     assert.doesNotMatch(openai, /output_format['"]?\s*[:,]\s*['"]webp/,
-        'у WebP немає поля роздільності — вставка втратить точність');
+        'WebP has no resolution field — insertion would lose accuracy');
 
     const place = fs.readFileSync(path.join(ROOT, 'place.js'), 'utf8');
     assert.match(place, /prepareForPlace\(base64ToBytes\(b64\), doc\.resolution\)/,
-        'саме цей рядок і робить роздільність несучою');
+        'this is the line that makes the resolution carry');
     assert.match(place, /createFile\(`ai_\$\{Date\.now\(\)\}_\$\{Math\.floor\(Math\.random\(\) \* 1e4\)\}\.\$\{file\.ext\}`/,
-        'розширення тимчасового файлу мусить відповідати байтам — Photoshop читає формат з нього');
+        'the temp file extension must match the bytes — Photoshop reads the format from it');
 });

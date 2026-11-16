@@ -12,8 +12,8 @@ test('the API key never reaches the command line, only the config file', () => {
     });
     assert.match(config, /header = "Authorization: Bearer sk-secret-value"/);
     assert.match(config, /data-binary = "@\/tmp\/x\.body"/);
-    // ps(1) показує аргументи будь-якого процесу — у команді секретів бути не може.
-    // Перевіряємо саме згенерований скрипт: це єдине, що реально доходить до shell.
+    // ps(1) shows the arguments of any process — the command must not contain secrets.
+    // We check the generated script itself: that is the only thing that actually reaches the shell.
     const jsx = t.buildJobJsx({ configFile: '/tmp/x.cfg', codeFile: '/tmp/x.code' });
     assert.doesNotMatch(jsx, /sk-secret-value/);
     assert.doesNotMatch(jsx, /Authorization/);
@@ -23,7 +23,7 @@ test('status and curl exit code travel through write-out, not through the shell'
     const config = t.buildCurlConfig({
         url: 'https://api.openai.com/v1/models', outFile: '/o', headerFile: '/h',
     });
-    // на Windows після `start /b` коду виходу не існує, тому він мусить бути у -w
+    // on Windows there is no exit code after `start /b`, so it has to be in -w
     assert.match(config, /write-out = "%\{http_code\} %\{exitcode\}"/);
     assert.deepEqual(t.parseWriteOut('401 0'), { status: 401, curlExit: 0, note: '' });
     assert.deepEqual(t.parseWriteOut('000 28'), { status: 0, curlExit: 28, note: '' });
@@ -33,8 +33,8 @@ test('status and curl exit code travel through write-out, not through the shell'
 });
 
 test('each platform gets its own async launch and quoting', () => {
-    // Обидві гілки живуть в одному згенерованому скрипті: ES3 лише вибирає
-    // готовий рядок за $.os, а лапки вже поставив shellQuote під час збірки.
+    // Both branches live in one generated script: ES3 only picks a ready
+    // string by $.os, and the quotes were already put there by shellQuote during assembly.
     const jsx = t.buildJobJsx({ configFile: "/tmp/it's.cfg", codeFile: '/tmp/a.code' });
     assert.match(jsx, /cmd \+ " &"/, 'POSIX backgrounds with &');
     assert.match(jsx, /start \\"\\" \/b /, 'cmd needs start /b; & there is sequential, not background');
@@ -50,11 +50,12 @@ test('config values escape backslashes so Windows paths survive', () => {
 });
 
 test('non-ASCII work paths are rejected before curl mangles them', () => {
-    // cmd на тестовій машині працює в кодовій сторінці 866: профіль з кирилицею
-    // доїхав би до curl зіпсованим, тому такий шлях краще відхилити заздалегідь
+    // cmd on the test machine runs in code page 866: a profile outside ASCII
+    // would reach curl corrupted, so such a path is better rejected up front.
+    // The samples use accented Latin (é, ä) — same non-ASCII rejection, no Cyrillic required.
     assert.equal(t.isAsciiPath('/Users/zg/Library/Caches/ExactFill'), true);
-    assert.equal(t.isAsciiPath('C:\\Users\\Оксана\\AppData\\Local\\Temp'), false);
-    assert.equal(t.isAsciiPath('/Users/Мар/tmp'), false);
+    assert.equal(t.isAsciiPath('C:\\Users\\Renée\\AppData\\Local\\Temp'), false);
+    assert.equal(t.isAsciiPath('/Users/Mär/tmp'), false);
     assert.equal(t.isAsciiPath(''), false);
 });
 
@@ -67,7 +68,7 @@ test('generated ExtendScript stays ASCII and ES3', () => {
     assert.match(jsx, /app\.system\(/);
     assert.match(jsx, /getenv\("SystemRoot"\)/, 'curl path must be derived, not hardcoded');
     assert.doesNotMatch(jsx, /C:\\\\Windows/);
-    assert.throws(() => t.buildJobJsx({ configFile: '/tmp/файл.cfg', codeFile: '/x' }),
+    assert.throws(() => t.buildJobJsx({ configFile: '/tmp/filé.cfg', codeFile: '/x' }),
         /ASCII/, 'a non-Latin path must fail loudly, not silently');
 });
 
@@ -100,9 +101,9 @@ test('mode gates the route and auto only switches after a real failure', () => {
     t.resetDirectFailure();
     assert.equal(t.active(), false, 'auto must not pay for curl until the direct route fails');
     t.noteDirectFailure();
-    // Тут немає ні UXP, ні містка — і це рівно той випадок, коли маршрут непридатний.
-    // 'auto' зобов'язане лишитися прямим, інакше кожен наступний запит ішов би
-    // в транспорт, який не може працювати.
+    // There is neither UXP nor a bridge here — exactly the case where the route is unusable.
+    // 'auto' must stay direct, otherwise every following request would go
+    // into a transport that cannot work.
     assert.equal(t.active(), false, 'auto needs a working bridge, not just a failure');
 
     assert.equal(t.setMode('nonsense'), 'auto', 'unknown modes fall back to auto');
@@ -114,7 +115,7 @@ test('preflight decides the route in seconds instead of waiting out the request 
     t.resetDirectFailure();
     assert.equal(t.isRouteDecided(), false);
 
-    // прямий шлях відповідає — навіть 403 доводить, що мережа є
+    // the direct path answers — even a 403 proves the network is there
     let calls = 0;
     const answering = async () => { calls++; return { ok: false, status: 403 }; };
     assert.equal(await t.decideRoute('https://api.openai.com', { fetchImpl: answering }), false);
@@ -123,7 +124,7 @@ test('preflight decides the route in seconds instead of waiting out the request 
     await t.decideRoute('https://api.openai.com', { fetchImpl: answering });
     assert.equal(calls, 1, 'the verdict is cached for the session');
 
-    // заблокований шлях саме висить, а не падає — на це і розрахований дедлайн
+    // a blocked path hangs rather than failing — the deadline is built for that
     t.setMode('auto');
     assert.equal(t.isRouteDecided(), false, 'changing mode must clear the verdict');
     const hanging = (url, init) => new Promise((resolve, reject) => {
@@ -131,8 +132,8 @@ test('preflight decides the route in seconds instead of waiting out the request 
             () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })));
     });
     const started = Date.now();
-    // містка тут немає, тому curl лишається недоступним і маршрут не змінюється,
-    // але головне — рішення приходить за мілісекунди, а не за 300 с
+    // there is no bridge here, so curl stays unavailable and the route does not change,
+    // but the point is that the decision arrives in milliseconds, not in 300 s
     assert.equal(await t.decideRoute('https://api.openai.com', { fetchImpl: hanging, timeoutMs: 120 }), false);
     assert.ok(Date.now() - started < 3000, 'a hanging route must not be waited out');
     assert.ok(t.PREFLIGHT_MS <= 10000, 'the real deadline stays in seconds');
@@ -152,53 +153,54 @@ test('streaming asks curl not to buffer, otherwise there is no live preview', ()
     assert.doesNotMatch(plain, /no-buffer/);
 });
 
-/* ── Гейти на життєвий цикл тимчасових файлів ──────────────────────────────
+/* ── Gates on the lifetime of temporary files ──────────────────────────────
  *
- * ⚠️ ЧОМУ СТАТИЧНІ, А НЕ ЮНІТИ: curlFetch зсередини робить require('uxp') і
- * require('photoshop'). Під node їх нема, а переписувати модуль заради
- * ін'єкції — більший ризик, ніж сама перевірка. Тому читаємо джерело як текст:
- * рівно той самий прийом, що вже стоїть у storage.test.js на виклик load().
+ * WHY STATIC, NOT UNITS: curlFetch does require('uxp') and require('photoshop')
+ * inside. Node does not have them, and rewriting the module for injection is a
+ * bigger risk than the check itself. So we read the source as text: the same
+ * trick already used in storage.test.js for the load() call.
  */
 const fs = require('node:fs');
 const path = require('node:path');
 const SRC = fs.readFileSync(path.join(__dirname, '..', 'providers', 'curl-transport.js'), 'utf8');
 const slice = (from, to) => SRC.slice(SRC.indexOf(from), SRC.indexOf(to));
 
-test('файли curl прибираються, навіть якщо запит не стартував', () => {
-    // ⚠️ ЦЕ НЕ ГІГІЄНА ДИСКУ, А ЄДИНЕ, ЩО ПРИБИРАЄ КЛЮЧ. Заголовок Authorization
-    // свідомо винесено у файл --config, щоб він не світився в `ps` (тест вище).
-    // Отже .cfg на диску == ключ API у відкритому вигляді. runJsx кидає штатно —
-    // для цього в i18n навіть є окремий рядок transport.bridgeRefused, — і
-    // раніше цей throw лишав .cfg у temp назавжди.
+test('curl files are cleaned up even if the request never started', () => {
+    // THIS IS NOT DISK HYGIENE, IT IS THE ONLY THING THAT REMOVES THE KEY. The
+    // Authorization header was deliberately moved into the --config file so it
+    // would not show up in `ps` (the test above). So a .cfg on disk == the API
+    // key in the clear. runJsx throws in the normal case — i18n even has a
+    // separate transport.bridgeRefused string for it — and that throw used to
+    // leave the .cfg in temp forever.
     const body = slice('async function curlFetch', 'async function fetchLike');
     assert.match(body, /catch[\s\S]{0,200}removeQuietly\(created\)/,
-        'curlFetch мусить прибрати created у catch і кинути помилку далі');
+        'curlFetch must remove created in the catch and rethrow');
 });
 
-test('струмовий запит прибирає файли, навіть якщо споживач кинув виняток', () => {
-    // ⚠️ Раніше removeQuietly жив ЛИШЕ всередині read() під `if (done)`. Це
-    // працює, поки споживач дочитує до кінця. Але requestStream у http.js
-    // викликає onEvent прямо в циклі: варто обробнику preview кинути виняток —
-    // і read() більше не покличуть, а .cfg (ключ) і .body (зображення
-    // користувача) лишаються в temp.
+test('a streaming request cleans up files even if the consumer throws', () => {
+    // removeQuietly used to live ONLY inside read() under `if (done)`. That
+    // works while the consumer reads to the end. But requestStream in http.js
+    // calls onEvent right in the loop: if the preview handler throws, read()
+    // is never called again, and .cfg (the key) and .body (the user's image)
+    // stay in temp.
     const body = slice('async function fetchLikeStream', '\nmodule.exports');
     assert.match(body, /pump[\s\S]{0,600}removeQuietly/,
-        'прибирання мусить висіти на завершенні pump, а не лише на read()');
+        'cleanup must hang off the end of pump, not only off read()');
 });
 
-test('команду для shell збирає та сама функція, яку перевіряють тести', () => {
-    // ⚠️ РОЗБІЖНІСТЬ ТЕСТА Й РАНТАЙМУ: buildCommand/shellQuote покриті тестами,
-    // але жодного разу не викликаються — справжню команду ES3-скрипт збирав сам
-    // своєю q(), яка лапки всередині шляху не екранувала взагалі. Тобто тести
-    // зеленіли на функції, якої в бою нема. Той самий клас, що й забутий
-    // presetManager.load().
+test('the shell command is built by the same function the tests check', () => {
+    // THE TEST AND THE RUNTIME DIVERGED: buildCommand/shellQuote were covered
+    // by tests but never called — the real command was assembled by the ES3
+    // script's own q(), which did not escape quotes inside a path at all. So
+    // the tests were green on a function that is not there in battle. The same
+    // class of bug as the forgotten presetManager.load().
     const risky = "/tmp/it's here.cfg";
     const jsx = t.buildJobJsx({ configFile: risky, codeFile: '/tmp/a.code' });
-    // не «схоже на екранування», а буквально результат тестованої функції
+    // not "looks like escaping", but literally the result of the tested function
     assert.ok(jsx.includes(JSON.stringify(t.shellQuote('darwin', risky))),
-        'апостроф у шляху мусить екранувати саме shellQuote');
+        'an apostrophe in a path must be escaped by shellQuote itself');
     assert.doesNotMatch(jsx, /function q\(/,
-        'жодної другої реалізації лапкування в ES3 — екранує лише shellQuote');
+        'no second quoting implementation in ES3 — only shellQuote escapes');
     assert.equal(typeof t.buildCommand, 'undefined',
-        'buildCommand видалено: одна реалізація — одне місце для помилки');
+        'buildCommand is gone: one implementation — one place for a bug');
 });

@@ -1,16 +1,17 @@
 /* ============================================================================
- *  cache.js — кеш згенерованих зображень для повторної вставки БЕЗ нового запиту.
+ *  cache.js — cache of generated images for reinsertion WITHOUT a new request.
  *
- *  ЧОМУ ЦЕ ОБМЕЖЕНО ЖОРСТКО. Старий плагін мав saveDebugBlob, який писав два
- *  файли на кожну генерацію і не видаляв нічого: намило 2.97 ГБ у 484 файлах,
- *  і Photoshop сканував цю папку при кожному старті. Тут навпаки:
- *    • MAX записів, ротація найстаріших при кожному save();
- *    • індекс у localStorage, самі байти — у папці даних плагіна;
- *    • bytes() віддає фактичний розмір, щоб його можна було ПОКАЗАТИ в панелі;
- *    • clear() є в UI, а не лише в коді.
+ *  WHY THIS IS STRICTLY BOUNDED. The old plugin had saveDebugBlob, which wrote
+ *  two files per generation and deleted nothing: it accumulated 2.97 GB across
+ *  484 files, and Photoshop scanned that folder on every start. Here the
+ *  opposite holds:
+ *    • MAX entries, rotating the oldest on every save();
+ *    • the index is in localStorage, the bytes themselves are in the plugin data folder;
+ *    • bytes() returns the real size so it can be SHOWN in the panel;
+ *    • clear() exists in the UI, not only in code.
  *
- *  Сенс не в дебазі, а в грошах: повторна вставка того самого результату —
- *  нуль запитів до провайдера.
+ *  The point is money, not debugging: reinserting the same result is zero
+ *  requests to the provider.
  * ========================================================================== */
 
 const uxpStorage = require('uxp').storage;
@@ -19,7 +20,7 @@ const MAX_ENTRIES = 8;
 const INDEX_KEY = require('./storage-keys.js').LS.cache;
 const SUBFOLDER = 'results';
 
-/** base64 з байтів без FileReader — в UXP він неповний. */
+/** base64 from bytes without FileReader — it is incomplete in UXP. */
 function bytesToB64(bytes) {
     const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
     let binary = '';
@@ -43,16 +44,16 @@ function readIndex() {
         return Array.isArray(arr) ? arr.filter(e => e && typeof e.id === 'string' &&
             typeof e.name === 'string' && /^[A-Za-z0-9._-]+$/.test(e.name)) : [];
     } catch (e) {
-        console.warn('[cache] індекс побитий, починаю з чистого:', e.message);
+        console.warn('[cache] index is corrupt, starting clean:', e.message);
         return [];
     }
 }
 function writeIndex(arr) {
     try { localStorage.setItem(INDEX_KEY, JSON.stringify(arr)); }
-    catch (e) { console.error('[cache] індекс не збережено:', e.message); }
+    catch (e) { console.error('[cache] index was not saved:', e.message); }
 }
 
-/** Папка даних плагіна. Не temp: temp чистить система, і кеш зникав би довільно. */
+/** Plugin data folder. Not temp: the system cleans temp, and the cache would vanish at random. */
 async function folder() {
     const data = await uxpStorage.localFileSystem.getDataFolder();
     try {
@@ -72,10 +73,10 @@ async function removeFile(name) {
 }
 
 /**
- * Кладе PNG у кеш і повертає id. Ротація тут же, синхронно з записом —
- * не в окремому «прибиральнику», якого легко забути викликати.
+ * Puts a PNG in the cache and returns the id. Rotation happens here, in step
+ * with the write — not in a separate "cleaner" that is easy to forget to call.
  * @param {string} b64
- * @param {object} meta — prompt, provider, model, ctx, target, quality тощо
+ * @param {object} meta — prompt, provider, model, ctx, target, quality, and so on
  */
 async function save(b64, meta = {}) {
     const bytes = b64ToBytes(b64);
@@ -87,13 +88,13 @@ async function save(b64, meta = {}) {
         await file.write(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
                          { format: uxpStorage.formats.binary });
     } catch (e) {
-        console.error('[cache] не записалось:', e.message);
+        console.error('[cache] write failed:', e.message);
         return null;
     }
 
     const index = readIndex();
     index.push({ id, name, size: bytes.length, at: Date.now(), meta });
-    // ротація: лишаємо MAX_ENTRIES найновіших, решту видаляємо з диска
+    // rotation: keep the MAX_ENTRIES newest, delete the rest from disk
     while (index.length > MAX_ENTRIES) {
         const old = index.shift();
         await removeFile(old.name);
@@ -102,7 +103,7 @@ async function save(b64, meta = {}) {
     return id;
 }
 
-/** Найновіші першими — так само, як історія. */
+/** Newest first — the same order as history. */
 function list() {
     return readIndex().slice().reverse();
 }
@@ -113,9 +114,9 @@ function bytes() {
 
 function human() {
     const b = bytes();
-    if (b < 1024) return `${b} Б`;
-    if (b < 1048576) return `${(b / 1024).toFixed(0)} КБ`;
-    return `${(b / 1048576).toFixed(1)} МБ`;
+    if (b < 1024) return `${b} B`;
+    if (b < 1048576) return `${(b / 1024).toFixed(0)} KB`;
+    return `${(b / 1048576).toFixed(1)} MB`;
 }
 
 async function get(id) {
@@ -127,7 +128,7 @@ async function get(id) {
         const buf = await file.read({ format: uxpStorage.formats.binary });
         return bytesToB64(buf);
     } catch (e) {
-        console.warn('[cache] файл зник, чищу запис:', e.message);
+        console.warn('[cache] file is gone, dropping the entry:', e.message);
         writeIndex(readIndex().filter(e2 => e2.id !== id));
         return null;
     }

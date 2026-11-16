@@ -1,13 +1,13 @@
 'use strict';
 
 /**
- * Залишає видимою лише гілку дерева, що містить активний шар.
+ * Leaves visible only the tree branch that contains the active layer.
  *
- * Видимість змінюється тільки на дублікаті документа. На відміну від
- * видалення верхньорівневих шарів, це коректно працює, коли активний шар
- * вкладений у групу: група та її предки лишаються видимими, сусідні гілки — ні.
+ * Visibility changes only on the document duplicate. Unlike deleting
+ * top-level layers, this still works when the active layer is nested in a
+ * group: the group and its ancestors stay visible, sibling branches do not.
  *
- * @returns {boolean} чи знайдено keepId у цій гілці
+ * @returns {boolean} whether keepId was found in this branch
  */
 function isolateLayerTree(layers, keepId) {
     let found = false;
@@ -20,8 +20,8 @@ function isolateLayerTree(layers, keepId) {
             if (children.length) inKeptBranch = isolateLayerTree(children, keepId);
         }
 
-        // Це виконується на копії документа. Помилку не ковтаємо: краще
-        // скасувати захоплення, ніж непомітно відправити провайдеру весь макет.
+        // This runs on the document copy. Do not swallow the error: cancelling
+        // the capture is better than quietly sending the whole layout to the provider.
         layer.visible = inKeptBranch;
         if (inKeptBranch) found = true;
     }

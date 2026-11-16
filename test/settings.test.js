@@ -1,5 +1,5 @@
 /* ============================================================================
- *  test/settings.test.js — panel-settings.js і єдине джерело ключів сховища.
+ *  test/settings.test.js — panel-settings.js and the single source of storage keys.
  * ========================================================================== */
 
 const assert = require('node:assert/strict');
@@ -15,17 +15,17 @@ const settings = require('../panel-settings.js');
 const { LS, LEGACY } = require('../storage-keys.js');
 const ROOT = path.join(__dirname, '..');
 
-test('ключі сховища оголошені рівно в одному файлі', () => {
-    /* ⚠️ ЧОМУ ЦЕ ВАЖЛИВО: 'ai_provider' був написаний літералом у пʼяти файлах.
-       Перейменування в одному місці НЕ ламало панель — вона просто читала інший
-       ключ, — зате мовчки псувало діагностику у звіті про ваду («Provider:
-       unknown»). Такі розбіжності в цьому плагіні вже коштували двох
-       розслідувань, тому гейт стоїть саме на літералі. */
+test('storage keys are declared in exactly one file', () => {
+    /* WHY THIS MATTERS: 'ai_provider' was written as a literal in five files.
+       Renaming it in one place did NOT break the panel — it simply read a different
+       key — but it silently spoiled the diagnostics in a bug report ("Provider:
+       unknown"). Divergences like that have already cost this plugin two
+       investigations, so the gate stands on the literal. */
     const offenders = [];
     for (const file of fs.readdirSync(ROOT).filter(f => f.endsWith('.js'))) {
         if (file === 'storage-keys.js') continue;
-        // коментарі не рахуємо: назвати ключ у поясненні — не те саме, що
-        // оголосити його вдруге, а прибирати згадку з тексту було б безглуздо
+        // comments do not count: naming a key in an explanation is not the same
+        // as declaring it a second time, and stripping the mention from the text would be pointless
         const src = fs.readFileSync(path.join(ROOT, file), 'utf8')
             .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
         for (const m of src.matchAll(/'(ai_[a-z_0-9]+|googleAiPresets|nanobanana_[a-z_]+|exactfill_locale)'/g)) {
@@ -33,17 +33,17 @@ test('ключі сховища оголошені рівно в одному ф
         }
     }
     assert.deepEqual(offenders, [],
-        'ключ сховища оголошується лише в storage-keys.js, решта бере його звідти');
+        'a storage key is declared only in storage-keys.js; everything else takes it from there');
 });
 
-test('жоден ключ не оголошено двічі під різними іменами', () => {
+test('no key is declared twice under different names', () => {
     const values = [...Object.values(LS), ...Object.values(LEGACY)];
-    assert.equal(new Set(values).size, values.length, `дублікат серед: ${values}`);
+    assert.equal(new Set(values).size, values.length, `duplicate among: ${values}`);
 });
 
-test('рівень якості зводиться під модель і НІКОЛИ не підвищується', () => {
-    /* Матриця «збережене побажання × модель». Підвищення тут — не косметика:
-       це чужі гроші, бо xhigh/max коштують дорожче за high. */
+test('quality is coerced to the model and is NEVER raised', () => {
+    /* Matrix of "saved wish × model". Raising it here is not cosmetic:
+       it is someone else's money, because xhigh/max cost more than high. */
     const cases = [
         ['gpt-image-2.5-sunburst', 'max',    'max'],
         ['gpt-image-2.5-flare',    'xhigh',  'xhigh'],
@@ -53,7 +53,7 @@ test('рівень якості зводиться під модель і НІК
         ['gpt-image-1-mini',       'xhigh',  'high'],
         ['gpt-image-1.5',          'medium', 'medium'],
         ['gpt-image-2.5-sunburst', 'low',    'low'],
-        ['неіснуюча-модель',       'max',    'high'],
+        ['no-such-model',       'max',    'high'],
     ];
     store.set(LS.provider, 'openai');
     for (const [model, saved, want] of cases) {
@@ -61,23 +61,23 @@ test('рівень якості зводиться під модель і НІК
         store.set(LS.quality, saved);
         assert.equal(settings.currentQuality(), want, `${model} + ${saved}`);
         assert.ok(settings.allowedQualities().includes(settings.currentQuality()),
-            `${model}: зведений рівень мусить бути серед дозволених`);
+            `${model}: the coerced level must be among the allowed ones`);
     }
-    // побажання лишається недоторканим — щоб max повернувся сам
-    assert.equal(store.get(LS.quality), 'max', 'зведення не має перезаписувати вибір користувача');
+    // the wish stays untouched — so max comes back on its own
+    assert.equal(store.get(LS.quality), 'max', 'coercion must not overwrite the user\'s choice');
 });
 
-test('невідомий провайдер відкочується на першого, а не валить панель', () => {
-    store.set(LS.provider, 'провайдер-якого-нема');
-    assert.ok(settings.currentProvider().id, 'мусить бути якийсь провайдер');
+test('an unknown provider falls back to the first one instead of crashing the panel', () => {
+    store.set(LS.provider, 'no-such-provider');
+    assert.ok(settings.currentProvider().id, 'there must be some provider');
     assert.doesNotThrow(() => settings.currentCaps());
     store.set(LS.provider, 'openai');
 });
 
-test('числові налаштування зажимаються в задокументовані межі', () => {
+test('numeric settings are clamped to the documented limits', () => {
     const pad = doc.getElementById('context-pad');
     const feather = doc.getElementById('edge-feather');
-    for (const [value, wantPad] of [['-40', 0], ['999', 50], ['15', 15], ['не число', 15], ['', 15]]) {
+    for (const [value, wantPad] of [['-40', 0], ['999', 50], ['15', 15], ['not a number', 15], ['', 15]]) {
         pad.value = value;
         assert.equal(settings.readSettings().padPercent, wantPad, `context-pad="${value}"`);
     }

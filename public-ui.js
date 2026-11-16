@@ -32,7 +32,7 @@ function safeDiagnostics() {
         `- Provider: ${storedSetting(publicKeys.provider, 'unknown')}`,
         `- Model: ${storedSetting(publicKeys.model, 'unknown')}`,
         `- Quality: ${storedSetting(publicKeys.quality, 'medium')}`,
-        // маршрут мережі — перше, що потрібно знати в звіті про «немає з'єднання»
+        // network route — the first thing a "no connection" report needs
         `- Network route: ${storedSetting(publicKeys.transport, 'auto')}`,
         `- Lossless input: ${storedSetting(publicKeys.lossless, 'default')}`,
         `- Live preview: ${storedSetting(publicKeys.preview, 'default')}`,
@@ -45,16 +45,17 @@ function setReportStatus(text) {
 }
 
 /**
- * Стеля довжини URL створення issue. GitHub на довший відповідає 414 URI Too
- * Long, і звіт не відкривається взагалі — мовчки, з погляду користувача.
+ * Ceiling on the issue-creation URL length. GitHub answers a longer one with
+ * 414 URI Too Long, and the report does not open at all — silently, from the
+ * user's point of view.
  */
 const MAX_REPORT_URL = 7800;
 
 /**
- * Обрізає рядок, не розриваючи сурогатну пару.
- * Без цього emoji на межі лишає самотній верхній сурогат, а encodeURIComponent
- * на ньому кидає URIError — тобто спроба вкластися в ліміт ламала б звіт
- * надійніше за сам ліміт.
+ * Slices a string without splitting a surrogate pair.
+ * Otherwise an emoji on the boundary leaves a lone high surrogate, and
+ * encodeURIComponent throws URIError on it — so trying to fit the limit
+ * would break the report more reliably than the limit itself.
  */
 function sliceSafe(text, n) {
     let end = Math.min(n, text.length);
@@ -69,7 +70,7 @@ function buildReportUrl(summary, details, includeDiagnostics = true) {
         const parts = [text || '_No additional details provided._'];
         if (includeDiagnostics) parts.push(`\n### Safe diagnostics\n${safeDiagnostics()}`);
         parts.push('\n> ExactFill did not include API keys, prompts, document names, paths, images, or usage history.');
-        // encodeURIComponent віддає чистий ASCII, тому .length тут — це байти
+        // encodeURIComponent returns plain ASCII, so .length here is bytes
         return `${publicAppInfo.issues}?title=${encodeURIComponent('[Bug] ' + sliceSafe(summary, 110))}` +
             `&body=${encodeURIComponent(parts.join('\n'))}`;
     };
@@ -78,11 +79,12 @@ function buildReportUrl(summary, details, includeDiagnostics = true) {
     const full = assemble(text);
     if (full.length <= MAX_REPORT_URL) return full;
 
-    /* ⚠️ ЧОМУ РІЗАТИ ДОВОДИТЬСЯ ТУТ, А НЕ maxlength НА ПОЛІ: у percent-encoding
-       латинська літера коштує 1 байт, кирилична — 6, емодзі — 12. Одна й та сама
-       межа В СИМВОЛАХ дає URL, довший удванадцятеро, тож жодне статичне число в
-       HTML ліміту не гарантує. Обрізане не зникає мовчки — на місці зрізу
-       лишається помітка, і решту користувач вставляє вже у вікні GitHub. */
+    /* Why the cut has to happen here, not via maxlength on the field: in
+       percent-encoding a Latin letter costs 1 byte, a Cyrillic letter 6, an
+       emoji 12. The same limit IN CHARACTERS can make a URL twelve times
+       longer, so no static number in HTML guarantees the limit. The cut is
+       not silent — a note stays at the cut, and the user pastes the rest in
+       the GitHub window. */
     const note = '\n\n' + publicI18n.t('report.truncated');
     let lo = 0, hi = text.length;
     while (lo < hi) {

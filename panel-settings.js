@@ -1,14 +1,15 @@
 /* ============================================================================
- *  panel-settings.js — що саме зараз вибрано в панелі.
+ *  panel-settings.js — what the panel currently has selected.
  *
- *  Виділено з main.js (був 1271 рядок, який робив UI, оркестрацію, сховище й
- *  рендер статистики одночасно). Тут єдина відповідальність: перетворити
- *  localStorage + стан контролів на об'єкт налаштувань запиту.
+ *  Split out of main.js (it was 1271 lines doing UI, orchestration, storage
+ *  and statistics rendering at once). The only responsibility here is to turn
+ *  localStorage plus control state into a request-settings object.
  *
- *  ⚠️ ЧОМУ ЦЕ ВАРТО БУЛО ВИНОСИТИ, а не лишати «як є»: саме тут живе зведення
- *  рівня якості до можливостей моделі. Помилка в ньому не падає й не видно в
- *  панелі — вона просто доїжджає до API як HTTP 400 або, гірше, як мовчазно
- *  дорожчий запит. Окремим модулем це перевіряється в node, а не в Photoshop.
+ *  Why this was worth extracting instead of leaving it in place: this is where
+ *  quality is coerced to what the model can do. A mistake here does not throw
+ *  and is not visible in the panel — it simply arrives at the API as HTTP 400
+ *  or, worse, as a silently more expensive request. As its own module it is
+ *  tested in node, not in Photoshop.
  * ========================================================================== */
 
 const { LS } = require('./storage-keys.js');
@@ -17,7 +18,7 @@ const geometry = require('./geometry.js');
 
 const $ = id => (typeof document === 'undefined' ? null : document.getElementById(id));
 
-/** Ціле з контрола, зажате в межі. Порожній або зіпсований контрол → def. */
+/** Integer from a control, clamped to bounds. An empty or broken control → def. */
 const num = (id, def, lo, hi) => {
     const v = parseInt($(id)?.value ?? String(def), 10);
     return Math.max(lo, Math.min(hi, isNaN(v) ? def : v));
@@ -28,7 +29,7 @@ function currentProvider() {
     return providers.get(localStorage.getItem(LS.provider)) || providers.first();
 }
 
-/** Можливості саме тієї моделі, що вибрана просто зараз. */
+/** Capabilities of the model that is selected right now. */
 function currentCaps() {
     try {
         return currentProvider().capsFor(localStorage.getItem(LS.model)) || {};
@@ -44,13 +45,13 @@ function allowedQualities() {
 }
 
 /**
- * ЄДИНЕ джерело рівня якості для всієї панелі — і для картки плану, і для
- * запиту. Раніше `readSettings` читав localStorage напряму, і рівень, недоступний
- * у новій моделі, доїжджав до API як є.
+ * The ONLY quality level for the whole panel — both the plan card and the
+ * request. `readSettings` used to read localStorage directly, and a level the
+ * new model does not offer would reach the API unchanged.
  *
- * Зведений результат СВІДОМО не записується назад у localStorage: там лежить
- * побажання користувача, а не те, що вміє сьогоднішня модель. Завдяки цьому
- * `max` повертається сам, щойно він знову стає доступним.
+ * The coerced result is deliberately NOT written back to localStorage: that
+ * stores the user's preference, not what today's model can do. Because of
+ * that, `max` comes back on its own as soon as it is available again.
  */
 function currentQuality() {
     return geometry.coerceQuality(localStorage.getItem(LS.quality) || 'medium',

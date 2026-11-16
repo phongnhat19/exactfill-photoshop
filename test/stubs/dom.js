@@ -1,20 +1,20 @@
 /* ============================================================================
- *  test/stubs/dom.js — мінімальний DOM + заглушки `uxp` і `photoshop`, щоб
- *  main.js можна було СПРАВДІ завантажити й запустити під node.
+ *  test/stubs/dom.js — a minimal DOM plus stubs of `uxp` and `photoshop`, so
+ *  main.js can ACTUALLY be loaded and run under node.
  *
- *  ⚠️ НАВІЩО ЦЕ ІСНУЄ: до цього файлу main.js (1271 рядок — увесь UI,
- *  оркестрація й запуск) жоден тест не завантажував. Його лише читали як
- *  ТЕКСТ у platform.test.js і storage.test.js. Тобто помилка в ініціалізації
- *  — забутий await, звертання до неіснуючої функції, зламаний require після
- *  рефактора — не ловилась нічим, окрім запуску Photoshop руками.
+ *  WHY THIS EXISTS: before this file, no test loaded main.js (1271 lines — the
+ *  whole UI, orchestration and startup). It was only read as TEXT in
+ *  platform.test.js and storage.test.js. So an initialization bug — a forgotten
+ *  await, a call to a function that does not exist, a broken require after a
+ *  refactor — was caught by nothing except running Photoshop by hand.
  *
- *  Дерево збирається з РЕАЛЬНОГО index.html: беремо кожен елемент, що має id,
- *  разом із його атрибутами. Тому стенд не може розійтися з розміткою —
- *  видалили елемент у HTML, і тест це побачить.
+ *  The tree is built from the REAL index.html: every element that has an id,
+ *  together with its attributes. So the stand cannot drift from the markup —
+ *  delete an element in the HTML, and a test will see it.
  *
- *  Це не браузер і не UXP. Тут немає ні розкладки, ні CSS, ні справжнього
- *  парсера селекторів. Мета одна: пройти шляхом ініціалізації й побачити, що
- *  саме опинилось у DOM.
+ *  This is not a browser and not UXP. There is no layout, no CSS, and no real
+ *  selector parser. The one goal is to walk the initialization path and see
+ *  what ended up in the DOM.
  * ========================================================================== */
 
 const fs = require('node:fs');
@@ -40,7 +40,7 @@ class ClassList {
     toString() { return [...this.items].join(' '); }
 }
 
-/** Підтримуємо рівно два види селекторів: `.class` і `tag`. Більшого код не просить. */
+/** Exactly two kinds of selectors are supported: `.class` and `tag`. The code asks for nothing more. */
 function matches(el, sel) {
     const s = String(sel).trim();
     return s.startsWith('.') ? el.classList.contains(s.slice(1)) : el.tagName === s.toLowerCase();
@@ -61,8 +61,8 @@ class El {
         this.text = '';
         this.classText = '';
         this.classList = new ClassList(this);
-        // за замовчуванням «елемент намалювався»: інакше ensureNumericControl
-        // підміняв би геть усе, і тест перевіряв би лише запасний шлях
+        // by default "the element drew": otherwise ensureNumericControl
+        // would substitute everything, and the test would check only the fallback path
         this.offsetHeight = 12;
     }
     get className() { return this.classText; }
@@ -112,7 +112,7 @@ class El {
         const l = this.listeners[type];
         if (l) this.listeners[type] = l.filter(f => f !== fn);
     }
-    /** Синхронна відправка події — тест сам вирішує, коли її «натиснути». */
+    /** Synchronous event dispatch — the test decides when to "press" it. */
     fire(type, ev = {}) {
         for (const fn of (this.listeners[type] || []).slice()) fn({ target: this, preventDefault() {}, ...ev });
     }
@@ -131,13 +131,13 @@ class Doc extends El {
     constructor() { super('#document'); }
     createElement(tag) { return new El(tag); }
     createTextNode(t) { const e = new El('#text'); e.textContent = t; return e; }
-    /** Обхід дерева, а не мапа: fillPicker і ensureNumericControl ПІДМІНЯЮТЬ вузли, зберігаючи id. */
+    /** A tree walk, not a map: fillPicker and ensureNumericControl REPLACE nodes, keeping the id. */
     getElementById(id) { return this.descendants().find(e => e.attributes.id === id) || null; }
     get documentElement() { return this; }
     get body() { return this; }
 }
 
-/* ── Дерево з реального index.html ─────────────────────────────────────────── */
+/* ── Tree from the real index.html ─────────────────────────────────────────── */
 
 const TAG_WITH_ID = /<([a-zA-Z][\w-]*)((?:\s+[^<>]*?)?)\bid="([^"]+)"([^<>]*)>/g;
 
@@ -152,10 +152,10 @@ function buildFromHtml(html) {
         for (const [, name, value] of raw.matchAll(/([\w-]+)="([^"]*)"/g)) {
             if (name !== 'id') el.setAttribute(name, value);
         }
-        /* ⚠️ Булеві атрибути пишуться БЕЗ значення (`disabled`, `checked`), тому
-           пара name="value" вище їх не бачить. Доки цього не було, кнопка, сіра
-           в розмітці, приїжджала в стенд активною — і тест «на старті сіра»
-           проходив би через поблажливість стенда, а не через код. */
+        /* Boolean attributes are written WITHOUT a value (`disabled`, `checked`),
+           so the name="value" pair above does not see them. Until this existed, a
+           button that is grey in the markup arrived at the stand enabled — and the
+           "grey at start" test would have passed because the stand was lenient, not because of the code. */
         for (const flag of ['disabled', 'checked', 'hidden', 'readonly']) {
             if (!el.hasAttribute(flag) && new RegExp(`(^|\\s)${flag}(\\s|$)`).test(raw)) {
                 el.setAttribute(flag, '');
@@ -170,7 +170,7 @@ function buildFromHtml(html) {
     return doc;
 }
 
-/* ── Заглушки хоста ────────────────────────────────────────────────────────── */
+/* ── Host stubs ────────────────────────────────────────────────────────────── */
 
 const photoshopStub = {
     app: { activeDocument: null, documents: [] },
@@ -195,8 +195,8 @@ const uxpStub = {
 };
 
 /**
- * Ставить глобалі й перехоплює require('photoshop') / require('uxp').
- * Повертає { doc, storage } — стан, який тест перевіряє після ініціалізації.
+ * Installs the globals and intercepts require('photoshop') / require('uxp').
+ * Returns { doc, storage } — the state a test checks after initialization.
  */
 function install({ locale = 'uk', storage = {} } = {}) {
     const doc = buildFromHtml(fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'));
@@ -219,8 +219,8 @@ function install({ locale = 'uk', storage = {} } = {}) {
     };
     global.window = {
         document: doc,
-        // ключа немає — це штатний стан першого запуску, і саме він мусить
-        // проходити ініціалізацію без винятків
+        // there is no key — that is the normal state of a first launch, and it
+        // must get through initialization without exceptions
         aiAuth: {
             getKey: async () => { throw new Error('key not set'); },
             refreshAuthUI: async () => {},

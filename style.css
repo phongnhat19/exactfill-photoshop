@@ -130,13 +130,13 @@ body {
     line-height: 1.45;
     resize: vertical;
 }
-/* Довгий промпт має прокручуватись усередині поля, а не розтягувати панель.
-   Це не має стосунку до стелі введення — її знімає maxlength у розмітці. */
+/* A long prompt should scroll inside the field, not stretch the panel.
+   This has nothing to do with the input ceiling — maxlength in the markup removes that. */
 #prompt-input { min-height: 88px; max-height: 220px; overflow-y: auto; margin: 0 0 10px; }
 
-/* Лічильник символів. Показуємо лише коли текст наблизився до межі: постійне
-   «12 / 10000» у 230-піксельній панелі — шум, а от мовчазна стеля коштувала
-   користувачам обрізаних промптів. */
+/* Character counter. Shown only when the text nears the limit: a permanent
+   "12 / 10000" in a 230-pixel panel is noise, but a silent ceiling cost
+   users truncated prompts. */
 .char-count {
     flex: 0 0 auto;
     color: var(--fg-dim);
@@ -210,9 +210,10 @@ sp-slider { width: 100%; }
 }
 .seg-btn {
     flex: 1 1 0;
-    /* ⚠️ ОБОВ'ЯЗКОВО: глобального box-sizing у цьому файлі немає, а в кнопки є
-       border-right. Без border-box він додається до flex-basis, і три кнопки по
-       33.333 % дають 100 % + 3px — рядок переповнюється й переносить третю. */
+    /* Required: this file has no global box-sizing, and the button has a
+       border-right. Without border-box that border is added to flex-basis, and
+       three buttons at 33.333% become 100% + 3px — the row overflows and wraps
+       the third button. */
     box-sizing: border-box;
     min-width: 0;
     min-height: 32px;
@@ -231,14 +232,14 @@ sp-slider { width: 100%; }
 }
 .seg-btn:last-child { border-right: none; }
 
-/* Два ряди по три — коли рівнів більше чотирьох (gpt-image-2.5).
-   Класи рядів ставить main.js: покладатись на :nth-child у UXP не можна.
+/* Two rows of three — when there are more than four levels (gpt-image-2.5).
+   Row classes are set by main.js: :nth-child cannot be relied on in UXP.
 
-   ⚠️ ВИМІРЯНО В PS 27.5.0: з flex-basis рівно 33.333 % рядок переповнювався
-   на кілька пікселів і кнопки лягали ПО ДВІ, а не по три — при тому що в
-   браузерному стенді все було правильно. Тому базис із запасом: 3 × 30 % = 90 %
-   влазить завжди, 4 × 30 % = 120 % гарантовано переноситься. Відсоток, а не
-   пікселі, тому поведінка не залежить від ширини панелі. */
+   Measured in PS 27.5.0: with flex-basis exactly 33.333% the row overflowed
+   by a few pixels and buttons landed TWO per row, not three — while the
+   browser harness looked correct. So the basis has slack: 3 × 30% = 90%
+   always fits, 4 × 30% = 120% is guaranteed to wrap. Percent, not pixels, so
+   the behavior does not depend on panel width. */
 .seg-wrap { flex-wrap: wrap; }
 .seg-wrap .seg-btn { flex: 1 1 30%; }
 .seg-wrap .seg-btn.seg-row-end { border-right: none; }
@@ -288,9 +289,9 @@ sp-slider { width: 100%; }
 .gen-row { margin: 0; flex-wrap: nowrap; }
 #generate-btn { width: 100%; }
 .regen-btn { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; }
-/* Дві вторинні кнопки поруч, але панель буває вузька: базис 110px змушує їх
-   перенестись у стовпчик замість того, щоб «Перегенерувати» стиснулось у три
-   літери з трикрапкою. */
+/* Two secondary buttons side by side, but the panel can be narrow: a 110px
+   basis forces them to wrap into a column instead of squeezing "Regenerate"
+   down to three letters and an ellipsis. */
 .regen-row { margin: 0; gap: 4px; }
 .regen-row .regen-btn { width: auto; flex: 1 1 110px; }
 .action-btn {

@@ -1,108 +1,108 @@
-# Контракти модулів — ЄДИНЕ ДЖЕРЕЛО ІСТИНИ
+# Module contracts — the single source of truth
 
-Плагін `ai-image-ps`. Один сценарій: прямокутне виділення → промпт → провайдер/модель/якість
-→ Smart Object точно на місці виділення. RGB і CMYK, 8/16/32 біт.
+Plugin `ai-image-ps`. One scenario: a rectangular selection → a prompt → provider/model/quality
+→ a Smart Object exactly on the selection. RGB and CMYK, 8/16/32 bit.
 
-**Не змінювати сигнатури нижче без правки цього файлу.** Модулі пишуться незалежно й мусять
-зійтися з першої спроби.
+**Do not change the signatures below without editing this file.** Modules are written independently and must
+fit together on the first try.
 
 ---
 
-## `geometry.js` — ГОТОВО, не чіпати
+## `geometry.js` — DONE, do not touch
 
-Чистий модуль, без `require('photoshop')`. Протестований у node.
+A pure module, no `require('photoshop')`. Tested in node.
 
 ```js
-unwrap(n)                          // {_unit,_value} → number, або number як є
-integerTarget(bounds)              // → {left,top,right,bottom,w,h}  цілі; округлює КРАЙ, не ширину
-planFrame(target, nat)             // nat={w,h} нативний PNG → {mode:'exact'|'cover',left,top,right,bottom}
+unwrap(n)                          // {_unit,_value} → number, or a number as-is
+integerTarget(bounds)              // → {left,top,right,bottom,w,h}  integers; rounds the EDGE, not the width
+planFrame(target, nat)             // nat={w,h} native PNG → {mode:'exact'|'cover',left,top,right,bottom}
 planRequest(caps, target, quality) // → {size:'WxH',quality} | {aspectRatio:'W:H',imageSize:'2K'}
 exactSize(target, caps, quality)   // → 'WxH' | null
 QUALITY_BUDGET                     // {low:1.2e6, medium:3e6, high:8294400, auto:3e6}
 ```
 
-`caps` — опис ГЕОМЕТРИЧНИХ можливостей моделі:
+`caps` describes the model's GEOMETRIC capabilities:
 ```js
 { arbitrary:true, step:16, maxEdge:3840, minPx:655360, maxPx:8294400, maxRatio:3 } // gpt-image-2
 { arbitrary:false, sizes:['1024x1024','1536x1024','1024x1536'] }                   // gpt-image-1/1.5/mini
 { arbitrary:false, aspects:['1:1','3:2',…], imageSizes:['1K','2K','4K'] }          // gemini
 ```
 
-## `place.js` — ГОТОВО, не чіпати
+## `place.js` — DONE, do not touch
 
 ```js
-placeGeneratedSmartObject(b64, bounds, channelName) // → report; ВИКЛИКАТИ У executeAsModal
-withPixels(params, fn)                              // getPixels + dispose у finally
-setPngResolution(pngBytes, ppi)                     // вписує чанк pHYs
-readPngSize(pngBytes)                               // → {w,h} з IHDR
+placeGeneratedSmartObject(b64, bounds, channelName) // → report; CALL INSIDE executeAsModal
+withPixels(params, fn)                              // getPixels + dispose in finally
+setPngResolution(pngBytes, ppi)                     // writes the pHYs chunk
+readPngSize(pngBytes)                               // → {w,h} from IHDR
 ```
 
 `report = { mode, nat:{w,h}, target, applied, residual:{dx,dy,dw,dh}, warnings:[] }`
-`residual` — головна метрика точності, мусить бути 0.
+`residual` is the main accuracy metric and must be 0.
 
 ---
 
-## `capture.js` — ПИСАТИ
+## `capture.js` — TO WRITE
 
-Один конвейєр захоплення на весь плагін. **Ніде більше `imaging.getPixels` не викликати.**
+One capture pipeline for the whole plugin. **Do not call `imaging.getPixels` anywhere else.**
 
 ```js
 /**
- * Захоплює пікселі виділеної області як JPEG.
- * Викликати ВСЕРЕДИНІ core.executeAsModal.
- * @param {{left,top,right,bottom}} bounds — цілі межі (з geometry.integerTarget)
- * @param {boolean} useLayerOnly — брати лише активний шар, не зведене
+ * Captures pixels of the selected area as JPEG.
+ * Call INSIDE core.executeAsModal.
+ * @param {{left,top,right,bottom}} bounds — integer bounds (from geometry.integerTarget)
+ * @param {boolean} useLayerOnly — take only the active layer, not the composite
  * @returns {Promise<{blob: Blob, docMode: string, bpc: number, viaDuplicate: boolean}>}
  */
 async function captureRegion(bounds, useLayerOnly = false)
 module.exports = { captureRegion, buildRectMaskPng };
 ```
 
-Обов'язкові вимоги:
+Required rules:
 
-1. **Whitelist за `doc.mode`.**
-   - `RGBColorMode` / `GrayscaleMode` / `LabColorMode` → напряму:
+1. **Whitelist by `doc.mode`.**
+   - `RGBColorMode` / `GrayscaleMode` / `LabColorMode` → direct:
      ```js
      imaging.getPixels({ sourceBounds, applyAlpha:false, layerID?,
        colorSpace:'RGB', colorProfile:'sRGB IEC61966-2.1', componentSize:8 })
      ```
-     `componentSize:8` замінює `convertMode depth:8`. `colorProfile` обов'язковий —
-     без нього конверсія недетермінована (відомий баг «black or negative colors»).
-   - **усе інше** (`CMYKColorMode`, Indexed, Duotone, Multichannel, Bitmap) → шлях через копію:
+     `componentSize:8` replaces `convertMode depth:8`. `colorProfile` is required —
+     without it the conversion is nondeterministic (the known "black or negative colors" bug).
+   - **everything else** (`CMYKColorMode`, Indexed, Duotone, Multichannel, Bitmap) → the copy path:
      ```js
      const dup = await doc.duplicate();
      try {
        await batchPlay convertMode → RGBColorMode (merge:false, flatten:false)
        await batchPlay convertMode → depth 8
-       await dup.crop(bounds)            // або selection + crop
+       await dup.crop(bounds)            // or selection + crop
        await dup.saveAs.jpg(tempFile, { quality: 12 }, true)
-       // прочитати байти tempFile → Blob
+       // read tempFile bytes → Blob
      } finally { await dup.closeWithoutSaving(); }
      ```
-     **Документ користувача не торкати ніколи.** Жодного `convertMode` на `app.activeDocument`.
-     Причина: `getPixels`/`getData()` у CMYK **валить Photoshop** (PS 26.9), а `putPixels`
-     CMYK не приймає в принципі — `createImageDataFromBuffer.colorSpace` документує лише
+     **Never touch the user's document.** No `convertMode` on `app.activeDocument`.
+     Reason: `getPixels`/`getData()` in CMYK **crashes Photoshop** (PS 26.9), and `putPixels`
+     does not accept CMYK at all — `createImageDataFromBuffer.colorSpace` documents only
      RGB/Grayscale/Lab.
 
-2. **Фолбек на 16/32 біт.** Є ризик, що `componentSize:8` з 16-бітного документа кидає
-   «Photoshop Error. Code: -1» (регресія з PS 26.3). Тому: спробувати `componentSize:8`,
-   і **при будь-якій помилці** тихо перейти на шлях через копію. Не намагатися конвертувати
-   вручну — старий `encodeAs8BitJpeg` робив `>>8` при діапазоні 16-біт [0..32768], через що
-   зображення виходило вдвічі темнішим.
+2. **Fallback for 16/32 bit.** There is a risk that `componentSize:8` on a 16-bit document throws
+   "Photoshop Error. Code: -1" (a regression since PS 26.3). So: try `componentSize:8`,
+   and **on any error** quietly switch to the copy path. Do not try to convert
+   by hand — the old `encodeAs8BitJpeg` did `>>8` on the 16-bit range [0..32768], which made
+   the image twice as dark.
 
-3. **`withPixels` із `place.js`** — усе, що отримує ImageData, мусить іти через нього.
-   ImageData не має перетинати межу функції.
+3. **`withPixels` from `place.js`** — everything that receives ImageData must go through it.
+   ImageData must not cross a function boundary.
 
-4. **`buildRectMaskPng(ctxW, ctxH, rect)`** — маска inpainting для прямокутної області.
-   `rect` у координатах контексту. Alpha=0 (прозорий) = «змінити тут», alpha=255 = «зберегти».
-   **НЕ використовувати stored-deflate** — старий `encodeMaskPNG` давав 4.00 MiB для 1024²
-   при ліміті OpenAI «<4MB». Варіанти: (а) 1-бітний PNG grayscale+tRNS, (б) справжній deflate
-   через RLE-подібне кодування однакових рядків, (в) тимчасовий документ + `saveAs.png`.
-   Для прямокутника рядки повторюються, тому (а) або (б) дають кілобайти.
+4. **`buildRectMaskPng(ctxW, ctxH, rect)`** — an inpainting mask for a rectangular area.
+   `rect` is in context coordinates. Alpha=0 (transparent) = "change here", alpha=255 = "keep".
+   **Do NOT use stored-deflate** — the old `encodeMaskPNG` produced 4.00 MiB for 1024²
+   at the OpenAI limit of "<4MB". Options: (a) 1-bit PNG grayscale+tRNS, (b) real deflate
+   via RLE-like encoding of identical rows, (c) a temporary document + `saveAs.png`.
+   A rectangle repeats rows, so (a) or (b) produce kilobytes.
 
 ---
 
-## `providers/openai.js`, `providers/google.js`, `providers/index.js` — ПИСАТИ
+## `providers/openai.js`, `providers/google.js`, `providers/index.js` — TO WRITE
 
 ```js
 // providers/index.js
@@ -111,116 +111,116 @@ module.exports = {
   get(id),         // → provider | null
 };
 
-// кожен provider:
+// each provider:
 module.exports = {
   id: 'openai',
   label: 'OpenAI',
-  keyName: 'openAiApiKey',                 // ключ у storage.secureStorage
-  async models(apiKey),                    // → [{id,label,caps}]  caps — див. geometry.js
+  keyName: 'openAiApiKey',                 // key in storage.secureStorage
+  async models(apiKey),                    // → [{id,label,caps}]  caps — see geometry.js
   supportsMask: true,                      // Gemini — false
   /**
    * @param {{apiKey,model,prompt,imageBlob,maskBlob,plan,n,onProgress}} o
-   *   plan — те, що віддав geometry.planRequest (кладеться в payload як є)
+   *   plan — what geometry.planRequest returned (placed in the payload as-is)
    *   onProgress(current,total,status,error)
-   * @returns {Promise<string[]>}  масив base64 PNG. БІЛЬШЕ НІЧОГО.
+   * @returns {Promise<string[]>}  an array of base64 PNG. NOTHING ELSE.
    */
   async generate(o),
 };
 ```
 
-Джерело коду — старі SDK, але **чистити**:
+The source of the code is the old SDKs, but **clean them up**:
 
 **OpenAI** (`GPT-imagePluginPS/openAiSdk.js`):
-- лишити `generateImage` (POST `images/generations`) і `editImage` (POST `images/edits`, multipart)
-- **видалити** `generateImageWithContext` + весь `/v1/responses` (імпортується, не викликається
-  ніде), `refinePrompt`, `generateChat`, мертві `OPENAI_IMAGE2_SIZES`/`OPENAI_IMAGE1_SIZES`
-- моделі й `caps`: `gpt-image-2` → `arbitrary:true` (решта — фіксовані три розміри);
+- keep `generateImage` (POST `images/generations`) and `editImage` (POST `images/edits`, multipart)
+- **delete** `generateImageWithContext` and the whole `/v1/responses` path (imported, never called
+  anywhere), `refinePrompt`, `generateChat`, and the dead `OPENAI_IMAGE2_SIZES`/`OPENAI_IMAGE1_SIZES`
+- models and `caps`: `gpt-image-2` → `arbitrary:true` (the rest are three fixed sizes);
   `gpt-image-1.5`, `gpt-image-1`, `gpt-image-1-mini` → `sizes:['1024x1024','1536x1024','1024x1536']`
-- `input_fidelity:'high'` — для всіх, **крім** `gpt-image-2` (він і так обробляє на high, параметр
-  для нього недоступний)
-- **додати retry на 429** з `Retry-After` і експоненційним backoff. Не ретраїти 400/401/403.
-- таймаут мусить **скасовувати** запит (`AbortController`), а не лише відкидати проміс,
-  і таймер чистити в `finally`
-- формат відповіді перевіряти: якщо немає `data[i].b64_json` — кидати читабельну помилку,
-  а не падати в `atob`
+- `input_fidelity:'high'` — for all of them, **except** `gpt-image-2` (it already processes at high; the parameter
+  is unavailable for it)
+- **add a retry on 429** with `Retry-After` and exponential backoff. Do not retry 400/401/403.
+- the timeout must **cancel** the request (`AbortController`), not merely reject the promise,
+  and the timer must be cleared in `finally`
+- check the response format: if there is no `data[i].b64_json`, throw a readable error
+  instead of falling into `atob`
 
 **Google** (`NanoBananaPluginPS/googleAiSdk.js`):
-- лишити `generateContent`-шлях (`gemini-*-image`), викинути **весь Imagen** (shutdown 2026-08-17)
-- **повернути** `generationConfig.imageConfig.{aspectRatio,imageSize}` — коментар у старому коді
-  «не документоване поле» ХИБНИЙ. `imageSize` пише велику «K»: `'1K'|'2K'|'4K'`.
-  `responseModalities:['TEXT','IMAGE']` лишається обов'язковим.
-- моделі: `gemini-3-pro-image`, `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`.
-  **Видалити** `gemini-1.5-*`, `gemini-2.0-flash-exp`, усі `imagen-3.0-*`.
-- ключ **не в query-рядку URL** — заголовок `x-goog-api-key`
-- перевіряти `finishReason` і `promptFeedback`: safety-блок мусить давати людський текст,
-  а не `TypeError`
-- `supportsMask:false` — параметра маски немає. Область показувати через контекст із заливкою.
+- keep the `generateContent` path (`gemini-*-image`); throw out **all of Imagen** (shutdown 2026-08-17)
+- **restore** `generationConfig.imageConfig.{aspectRatio,imageSize}` — the comment in the old code
+  that it is "an undocumented field" is WRONG. `imageSize` uses a capital "K": `'1K'|'2K'|'4K'`.
+  `responseModalities:['TEXT','IMAGE']` stays required.
+- models: `gemini-3-pro-image`, `gemini-3.1-flash-image`, `gemini-3.1-flash-lite-image`.
+  **Delete** `gemini-1.5-*`, `gemini-2.0-flash-exp`, and all `imagen-3.0-*`.
+- the key is **not in the URL query string** — the `x-goog-api-key` header
+- check `finishReason` and `promptFeedback`: a safety block must produce human-readable text,
+  not a `TypeError`
+- `supportsMask:false` — there is no mask parameter. Show the area through context with a fill.
 
 ---
 
-## `main.js` — ПИСАТИ, цільовий обсяг ≤ 300 рядків
+## `main.js` — TO WRITE, target size ≤ 300 lines
 
-Єдиний потік. Ніякої іншої логіки в файлі бути не має.
+A single flow. The file must contain no other logic.
 
 ```
-1. Гейт (НЕ модально):
-   doc = app.activeDocument            → нема: alert «Відкрийте документ»
-   sel = doc.selection.bounds          → null: alert «Виділіть область»
-   doc.selection.solid === false       → попередження «сценарій для прямокутного виділення»
-   Кнопка Generate блокується на весь час роботи (зараз її можна натиснути двічі).
+1. Gate (NOT modal):
+   doc = app.activeDocument            → none: alert "Open a document"
+   sel = doc.selection.bounds          → null: alert "Select an area"
+   doc.selection.solid === false       → warning "this flow is for a rectangular selection"
+   The Generate button is locked for the whole operation (right now it can be pressed twice).
 
 2. target = geometry.integerTarget(sel)
    provider = providers.get(localStorage.provider)
-   model, quality, n — з UI
+   model, quality, n — from the UI
    plan = geometry.planRequest(caps, target, quality)
 
 3. executeAsModal → capture.captureRegion(target, useLayerOnly) → {blob}
-   Маска: якщо provider.supportsMask і CONTEXT_PAD > 0 — capture.buildRectMaskPng(...)
+   Mask: if provider.supportsMask and CONTEXT_PAD > 0 — capture.buildRectMaskPng(...)
 
-4. НЕ модально → provider.generate({...}) → base64[]
+4. NOT modal → provider.generate({...}) → base64[]
 
-5. executeAsModal → для кожного b64:
+5. executeAsModal → for each b64:
      place.placeGeneratedSmartObject(b64, target, channelName)
-   Перед циклом — зберегти виділення в тимчасовий канал; у finally видалити канал.
-   Логувати report.residual кожної вставки.
+   Before the loop, save the selection to a temporary channel; delete the channel in finally.
+   Log report.residual for every insertion.
 
-6. Перевірка, що документ ТОЙ САМИЙ, що на кроці 3 (порівняти doc.id) — інакше alert і вихід.
+6. Check that the document is THE SAME as in step 3 (compare doc.id) — otherwise alert and exit.
 ```
 
-Обов'язково:
-- зберігати в `localStorage`: `provider`, `model`, `quality`, `n`, `prompt`, `useLayerOnly`
-- **жодного `saveDebugBlob`** — він намив 3 ГБ у 484 файлах
-- усі `catch` показують користувачу текст помилки; тихого `return null` не має бути ніде
+Required:
+- save to `localStorage`: `provider`, `model`, `quality`, `n`, `prompt`, `useLayerOnly`
+- **no `saveDebugBlob`** — it accumulated 3 GB across 484 files
+- every `catch` shows the user the error text; there must be no silent `return null` anywhere
 
-## `index.html` + `style.css` — ПИСАТИ
+## `index.html` + `style.css` — TO WRITE
 
-Одна панель, без вкладок. Елементи:
-промпт (textarea) · провайдер (sp-picker) · модель (sp-picker) · якість (4 кнопки
-low/medium/high/auto) · к-сть варіацій (sp-number-field 1-4) · «лише активний шар» (checkbox) ·
-Generate + спінер · секція пресетів (згортається) · секція історії (згортається) · керування API-ключами.
+One panel, no tabs. Elements:
+prompt (textarea) · provider (sp-picker) · model (sp-picker) · quality (4 buttons
+low/medium/high/auto) · variation count (sp-number-field 1-4) · "active layer only" (checkbox) ·
+Generate + spinner · presets section (collapsible) · history section (collapsible) · API-key controls.
 
-**Викинути:** вкладки Grid і Chat, Refine-prompt, Whole-Image/Gen-Fill, Upscale,
-Reference images, тумблер контексту.
-`style.css` — узяти зі старого й вирізати правила мертвих блоків (з 1600 рядків лишається ~700).
+**Remove:** the Grid and Chat tabs, Refine-prompt, Whole-Image/Gen-Fill, Upscale,
+Reference images, and the context toggle.
+`style.css` — take it from the old one and cut the rules for dead blocks (about 700 lines remain of 1600).
 
-## `manifest.json` — ПИСАТИ
+## `manifest.json` — TO WRITE
 
 ```
 id: ai-image-ps            name: AI Image
-host.app PS, minVersion "25.0.0"      ← doc.selection.bounds/.solid з 25.0
+host.app PS, minVersion "25.0.0"      ← doc.selection.bounds/.solid since 25.0
 manifestVersion 5
 requiredPermissions.localFileSystem: "request"
 requiredPermissions.network.domains: ["https://api.openai.com",
                                       "https://generativelanguage.googleapis.com"]
-  ← БЕЗ http://localhost:3000 (був у старому без потреби)
-entrypoints: один panel, icons/openai.svg
+  ← WITHOUT http://localhost:3000 (it was in the old manifest for no reason)
+entrypoints: one panel, icons/openai.svg
 ```
 
 ---
 
-## Стиль
+## Style
 
-- Комментарі **українською**, по суті: чому так, а не що робить рядок.
-- Без нових залежностей. Тільки `photoshop` і `uxp`.
-- `node --check` мусить проходити на кожному файлі.
-- Не копіювати старий код без потреби — половина його мертва.
+- Comments in **English**, about the why, not a restatement of what the line does.
+- No new dependencies. Only `photoshop` and `uxp`.
+- `node --check` must pass on every file.
+- Do not copy old code without a reason — half of it is dead.

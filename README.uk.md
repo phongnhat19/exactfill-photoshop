@@ -1,45 +1,45 @@
-# ExactFill для Photoshop
+# ExactFill for Photoshop
 
-[English version](README.md)
+[Primary English README](README.md)
 
-Точне AI-редагування саме в обраній області.
+Exact AI edits, placed exactly in the selected area.
 
-ExactFill — безкоштовний плагін Photoshop із відкритим кодом, який напряму
-підключається до OpenAI та Google Gemini через ваші власні API-ключі. Виділіть
-область, опишіть зміну — і отримайте результат як точно розміщений Smart Object
-із нативною маскою шару Photoshop.
+ExactFill is a free, open-source Photoshop plugin that connects directly to
+OpenAI and Google Gemini with your own API keys. Select an area, describe the
+change, and get the result back as a precisely placed Smart Object with a
+native Photoshop layer mask.
 
-> Без реєстрації, сервера ExactFill і внутрішніх кредитів. Ви платите напряму
-> AI-провайдеру й бачите оцінку витрат API у самому плагіні.
+> No account, no ExactFill server, and no internal credits. You pay the AI
+> provider directly and see an API cost estimate inside the plugin.
 
-## Демо
+## Demo
 
-[![ExactFill додає сідло й вершницю у Photoshop](docs/assets/demo-after.jpg)](https://zgmrclick.github.io/exactfill-photoshop/)
+[![ExactFill adding a saddle and rider in Photoshop](docs/assets/demo-after.jpg)](https://zgmrclick.github.io/exactfill-photoshop/)
 
-Спробуйте [інтерактивне порівняння до/після](https://zgmrclick.github.io/exactfill-photoshop/)
-або подивіться [22-секундний запис Photoshop](docs/assets/exactfill-demo.mp4). Демо
-використовує справжнє виділення й показує результат як точно розміщений шар.
+Try the [interactive before/after comparison](https://zgmrclick.github.io/exactfill-photoshop/)
+or watch the [22-second Photoshop recording](docs/assets/exactfill-demo.mp4). The demo
+uses a real selection and shows the result as a precisely placed layer.
 
-## Чому ExactFill
+## Why ExactFill
 
-- Точне розміщення в початковому виділенні, включно з непарними й дробовими межами.
-- Неруйнівний Smart Object і нативна маска шару Photoshop.
-- RGB, CMYK, Grayscale та Lab; 8/16/32-бітні документи не конвертуються.
-- OpenAI GPT Image (разом із GPT Image 2.5) і Google Gemini в одній панелі.
-- Змішування краю, контекст, референси, прозорий фон і вхід без втрат.
-- Проміжні кадри OpenAI, коли API та UXP підтримують потокову відповідь.
-- Постійна статистика витрат, історія, пресети та локальний кеш результатів.
-- Український та англійський інтерфейс.
+- Precise placement in the original selection, including odd and fractional bounds.
+- A non-destructive Smart Object and a native Photoshop layer mask.
+- RGB, CMYK, Grayscale, and Lab; 8/16/32-bit documents are not converted.
+- OpenAI GPT Image (including GPT Image 2.5) and Google Gemini in one panel.
+- Edge blending, context, references, a transparent background, and lossless input.
+- OpenAI intermediate frames when the API and UXP support a streaming response.
+- Persistent cost statistics, history, presets, and a local result cache.
+- An English interface. The `uk` locale code remains as a compatibility alias with the same English text.
 
-## Встановлення
+## Install
 
-Завантажте `ExactFill-1.7.1.zip` зі сторінки
-[Releases](https://github.com/zgmrclick/exactfill-photoshop/releases), повністю
-розпакуйте архів і закрийте Photoshop.
+Download `ExactFill-1.7.1.zip` from the
+[Releases](https://github.com/zgmrclick/exactfill-photoshop/releases) page, extract
+the archive completely, and close Photoshop.
 
 ### Windows
 
-Скопіюйте цілу папку `ExactFill` до папки `Plug-ins` вашого Photoshop, наприклад:
+Copy the entire `ExactFill` folder to your Photoshop `Plug-ins` folder, for example:
 
 ```text
 C:\Program Files\Adobe\Adobe Photoshop 2026\Plug-ins\ExactFill
@@ -47,80 +47,80 @@ C:\Program Files\Adobe\Adobe Photoshop 2026\Plug-ins\ExactFill
 
 ### macOS
 
-Скопіюйте цілу папку `ExactFill` до папки `Plug-ins` вашого Photoshop, наприклад:
+Copy the entire `ExactFill` folder to your Photoshop `Plug-ins` folder, for example:
 
 ```text
 /Applications/Adobe Photoshop 2026/Plug-ins/ExactFill
 ```
 
-Запустіть Photoshop і відкрийте **Plugins → ExactFill**. У кінцевій папці
-`ExactFill` файл `manifest.json` має лежати безпосередньо всередині. Якщо оновлюєте
-приватну збірку **AI Image**, замініть її стару папку `AiImagePS`, а не залишайте
-обидві копії.
+Start Photoshop and open **Plugins → ExactFill**. In the final `ExactFill` folder,
+`manifest.json` must sit directly inside it. If you are upgrading a private **AI Image**
+build, replace its old `AiImagePS` folder instead of keeping both copies.
 
-## Перший запуск
+## First run
 
-1. Відкрийте документ і створіть виділення.
-2. Виберіть OpenAI або Google Gemini та вставте API-ключ цього провайдера.
-3. Опишіть потрібну зміну й натисніть **Генерувати**.
-4. Перевірте новий Smart Object і за потреби відкоригуйте його маску.
+1. Open a document and make a selection.
+2. Choose OpenAI or Google Gemini and paste that provider's API key.
+3. Describe the change you want and press **Generate**.
+4. Review the new Smart Object and adjust its mask if needed.
 
-API-ключі зберігаються через Photoshop UXP `secureStorage`. Виділені пікселі,
-промпт і додаткові референси надсилаються напряму вибраному провайдеру. Докладніше —
-у [політиці приватності](PRIVACY.md).
+API keys are stored through Photoshop UXP `secureStorage`. The selected pixels,
+the prompt, and extra references are sent directly to the selected provider. See the
+[privacy policy](PRIVACY.md) for details.
 
-## Вартість
+## Cost
 
-ExactFill безкоштовний. OpenAI і Google можуть стягувати плату за використання API.
-Плагін веде локальний журнал і показує оцінку вартості в USD, коли у відповіді API
-достатньо даних. Ціни й доступність моделей можуть змінюватися; рахунок провайдера
-завжди є остаточним.
+ExactFill is free. OpenAI and Google may charge for API use. The plugin keeps a
+local ledger and shows an estimated USD cost when the API response has enough
+data. Prices and model availability can change; the provider's bill is always
+final.
 
-## Сумісність
+## Compatibility
 
-- Adobe Photoshop 2024 або новіший (`25.0+`).
-- Для Windows і macOS використовується один і той самий плагін.
-- Потрібні інтернет і API-ключ вибраного провайдера.
-- Фінальну поведінку на Windows слід перевіряти у справжньому Photoshop на Windows.
+- Adobe Photoshop 2024 or newer (`25.0+`).
+- Windows and macOS use the same plugin.
+- An internet connection and an API key for the selected provider are required.
+- Final behavior on Windows should be checked in a real Photoshop on Windows.
 
-### Фаєрволи та проксі
+### Firewalls and proxies
 
-ExactFill підключається до провайдера напряму з Photoshop/UXP через HTTPS. Якщо
-фаєрвол, проксі або захисна політика обмежує Photoshop, дозвольте вихідний
-TCP-порт 443 до домену потрібного провайдера:
+ExactFill connects to the provider directly from Photoshop/UXP over HTTPS. If a
+firewall, proxy, or security policy restricts Photoshop, allow outbound TCP
+port 443 to the domain of the provider you need:
 
 - OpenAI: `api.openai.com`
 - Google Gemini: `generativelanguage.googleapis.com`
 
-Мережевий дозвіл у `manifest.json` діє лише всередині UXP-пісочниці; плагін не
-може змінити або обійти системний фаєрвол. На macOS додайте ці домени до дозволів
-для Photoshop/Adobe UXP у своїй програмі мережевої фільтрації. На Windows
-перевірте **Windows Defender Firewall with Advanced Security → Outbound Rules**
-і сторонні фаєрволи. [За правилами Microsoft](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/rules#rule-precedence-for-inbound-and-outbound-rules)
-явний `Block` має пріоритет над суперечливим `Allow`, тому загальне блокування
-Photoshop треба вимкнути або замінити політикою, що підтримує потрібні винятки за
-доменами. Не використовуйте сталі IP-адреси: адреси провайдерів можуть змінюватися.
+The network permission in `manifest.json` applies only inside the UXP sandbox; the
+plugin cannot change or bypass a system firewall. On macOS, add these domains to
+the allow rules for Photoshop/Adobe UXP in your network-filtering app. On Windows,
+check **Windows Defender Firewall with Advanced Security → Outbound Rules** and
+third-party firewalls. [Per Microsoft's rules](https://learn.microsoft.com/en-us/windows/security/operating-system-security/network-security/windows-firewall/rules#rule-precedence-for-inbound-and-outbound-rules)
+an explicit `Block` takes priority over a conflicting `Allow`, so a broad Photoshop
+block must be disabled or replaced by a policy that supports the required domain
+exceptions. Do not use fixed IP addresses: provider addresses can change.
 
-Така сама двомовна інструкція є в `INSTALL.txt` кожного релізу.
+The same English instructions are in `INSTALL.txt` of every release, including the
+former Ukrainian section now translated in place.
 
-## Помилки й підтримка
+## Bugs and support
 
-Скористайтеся формою **Повідомити про помилку** в панелі або створіть
+Use the **Report a bug** form in the panel, or open a
 [GitHub Issue](https://github.com/zgmrclick/exactfill-photoshop/issues/new/choose).
-Форма може додати версію, ОС, провайдера, модель і налаштування, але не додає
-API-ключі, промпти, назви документів, шляхи, зображення чи історію використання.
+The form can add the version, OS, provider, model, and settings, but it does not add
+API keys, prompts, document names, paths, images, or usage history.
 
-ExactFill безкоштовний і має відкритий код. Якщо він заощаджує вам час,
-[підтримайте розробку на Ko-fi](https://ko-fi.com/havryil89140). Також допомагають
-зірка на GitHub, корисний звіт про помилку, коротке демо або рекомендація колезі.
+ExactFill is free and open source. If it saves you time,
+[support development on Ko-fi](https://ko-fi.com/havryil89140). A GitHub star, a
+useful bug report, a short demo, or recommending it to a colleague also helps.
 
-## Розробка
+## Development
 
-Встановлювати npm-залежності не потрібно:
+No npm dependencies need to be installed:
 
 ```bash
 npm test
 npm run build
 ```
 
-Ліцензія: [MIT](LICENSE).
+License: [MIT](LICENSE).

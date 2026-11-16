@@ -1,20 +1,20 @@
 /* ============================================================================
- *  ui-dom.js — дрібні цеглинки для ручної збірки DOM.
+ *  ui-dom.js — small bricks for building DOM by hand.
  *
- *  ⚠️ НАВІЩО: у панелі п'ять функцій рендеру (витрати, референси, пресети,
- *  історія, кеш) повторювали той самий трирядковий шаблон
- *  «createElement → className → textContent → appendChild» близько сорока разів.
- *  Помилка в такому шаблоні не падає — вона просто не малює рядок.
+ *  Why: the panel had five render functions (usage, references, presets,
+ *  history, cache) repeating the same three-line pattern
+ *  "createElement → className → textContent → appendChild" about forty times.
+ *  A mistake in that pattern does not throw — it simply does not draw the row.
  *
- *  Тут НЕМА шаблонізатора і немає innerHTML з даними: у панелі трапляється
- *  довільний текст користувача (промпти, назви пресетів), і єдиний безпечний
- *  спосіб його показати — textContent.
+ *  There is NO templating engine and no innerHTML of data: the panel shows
+ *  arbitrary user text (prompts, preset names), and the only safe way to
+ *  display it is textContent.
  *
- *  Модуль підключається через require(), не через <script>, тому його
- *  top-level імена не конфліктують зі спільним scope панелі.
+ *  The module is loaded through require(), not through <script>, so its
+ *  top-level names do not collide with the panel's shared scope.
  * ========================================================================== */
 
-/** Елемент із класом і текстом. Порожні className/text просто не ставимо. */
+/** Element with a class and text. Empty className/text are simply not set. */
 function el(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -22,15 +22,15 @@ function el(tag, className, text) {
     return node;
 }
 
-/** Прибирає дітей. Окремо від fill(), бо порожній стан теж треба вміти. */
+/** Removes children. Separate from fill(), because the empty state must work too. */
 function clear(node) {
     if (node) node.innerHTML = '';
 }
 
 /**
- * Замінює вміст контейнера набором готових дітей.
- * Відсутній контейнер — не помилка: секцію могли прибрати з розмітки, і рендер
- * не має через це валити всю ініціалізацію.
+ * Replaces a container's contents with a set of ready children.
+ * A missing container is not an error: the section may have been removed from
+ * the markup, and rendering must not take down the whole initialization.
  */
 function fill(node, children) {
     if (!node) return;
@@ -40,15 +40,17 @@ function fill(node, children) {
 }
 
 /**
- * Кнопка-хрестик, якою в панелі видаляють усе: референс, пресет, запис історії,
- * запис кешу. Була скопійована чотири рази, і в одній копії загубився title.
+ * The cross button the panel uses to delete everything: a reference, a preset,
+ * a history entry, a cache entry. It was copied four times, and one copy lost
+ * its title.
  */
 function iconButton({ title, onClick, className = 'icon-btn', glyph = '✕' }) {
     const btn = el('button', className, glyph);
     btn.type = 'button';
     if (title) btn.title = title;
-    // ⚠️ Гліф ✕ для екранного читача — це «знак множення». Без aria-label
-    // кнопка озвучувалась саме так, тому підпис тут обов'язковий, а не окраса.
+    // The glyph ✕ is a "multiplication sign" to a screen reader. Without
+    // aria-label the button was announced that way, so the label is required,
+    // not decoration.
     btn.setAttribute('aria-label', title || glyph);
     btn.addEventListener('click', onClick);
     return btn;

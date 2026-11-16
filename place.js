@@ -1,21 +1,21 @@
 /* ============================================================================
- *  place.js — центральна функція вставки згенерованого зображення.
+ *  place.js — the central function that inserts a generated image.
  *
- *  Принцип: НЕ передбачаємо, куди Photoshop покладе шар. КЛАДЕМО → МІРЯЄМО →
- *  діємо ВІДНОСНО ВИМІРЯНОГО → міряємо знову. Відсоток масштабу тут не є
- *  джерелом похибки саме тому, що знаменник — щойно прочитана рамка, а не
- *  припущення. putPixels не задіяний ніде, тому працює в RGB, CMYK, Grayscale,
- *  8/16/32 біт.
- *  Замінює: main.js:556-661 (getImageDataFromBase64), :779-871
+ *  Principle: do NOT predict where Photoshop will put the layer. PLACE → MEASURE →
+ *  act RELATIVE TO WHAT WAS MEASURED → measure again. The scale percent is not
+ *  a source of error here precisely because the denominator is the frame just
+ *  read, not an assumption. putPixels is not used anywhere, so this works in
+ *  RGB, CMYK, Grayscale, 8/16/32 bit.
+ *  Replaces: main.js:556-661 (getImageDataFromBase64), :779-871
  *  (pasteSingleAsSmartObject), :873-963 (pasteBackImages).
  *
- *  ВИМІРЯНО в Photoshop 27.5.0 (не з документації — Adobe batchPlay-ID не
- *  документує). Кроки 4-5 нижче перенесені дослівно у verify/probe6.jsx і
- *  прогнані: матриця 14 кейсів × RGB 8/16/32, CMYK 8/16, Grayscale 16 ×
- *  300 і 72 ppi × парне/непарне/дробові межі/1×1/cover/поза канвою/
- *  відʼємний початок/збільшення — residual 0 всюди, один прохід на кейс.
- *  Протоколи: verify/probe6.txt (цей алгоритм), verify/probe2-5.txt (як
- *  до нього дійшли). Метрика в консолі — report.residual, мусить бути нулем.
+ *  MEASURED in Photoshop 27.5.0 (not from the docs — Adobe does not document
+ *  batchPlay IDs). Steps 4-5 below were copied verbatim into verify/probe6.jsx
+ *  and run: a matrix of 14 cases × RGB 8/16/32, CMYK 8/16, Grayscale 16 ×
+ *  300 and 72 ppi × even/odd/fractional bounds/1×1/cover/off canvas/
+ *  negative origin/scale-up — residual 0 everywhere, one pass per case.
+ *  Logs: verify/probe6.txt (this algorithm), verify/probe2-5.txt (how we
+ *  got here). The console metric is report.residual and must be zero.
  * ========================================================================== */
 const { app, core, imaging, constants } = require('photoshop');
 const { batchPlay } = require('photoshop').action;
@@ -23,10 +23,11 @@ const uxpStorage = require('uxp').storage;
 const placeI18n = require('./i18n.js');
 
 /**
- * Єдиний дозволений спосіб торкатися imaging у всьому плагіні: dispose у finally
- * структурно неможливо забути, і ImageData не перетинає межу функції.
- * Шлях ВСТАВКИ (нижче) не викликає його жодного разу — саме тому він не падає в
- * CMYK і не тече. Хелпер потрібен лише шляху ЗАХОПЛЕННЯ (capture.js).
+ * The only allowed way to touch imaging in the whole plugin: dispose in finally
+ * is structurally impossible to forget, and ImageData does not cross a function
+ * boundary. The INSERT path (below) never calls it — that is why it does not
+ * crash in CMYK and does not leak. The helper is needed only by the CAPTURE
+ * path (capture.js).
  */
 async function withPixels(params, fn) {
     const res = await imaging.getPixels(params);
@@ -34,7 +35,7 @@ async function withPixels(params, fn) {
     finally { try { res.imageData.dispose(); } catch (e) { console.warn('[dispose]', e.message); } }
 }
 
-/* PNG/JPEG-хелпери — у png.js (там справжній deflate, а не stored-блоки старого коду). */
+/* PNG/JPEG helpers live in png.js (real deflate there, not the old code's stored blocks). */
 const { readPngSize, setPngResolution, prepareForPlace } = require('./png.js');
 
 function base64ToBytes(b64) {
@@ -44,15 +45,15 @@ function base64ToBytes(b64) {
     return out;
 }
 
-/* ── Канал вимірювання ────────────────────────────────────────────────────── */
+/* ── Measurement channel ───────────────────────────────────────────────────── */
 const PX = v => ({ _unit: 'pixelsUnit', _value: v });
 const unwrap = n => (n && typeof n === 'object' && '_value' in n) ? n._value : n;
 
 /**
- * Читає ФАКТИЧНУ рамку Smart Object через smartObjectMore.transform (8 чисел =
- * 4 кути). Це єдиний правдивий канал: layer.bounds віддає лише площу з
- * непрозорими пікселями В МЕЖАХ КАНВИ (для SO 100×100 повертав 62×62), тому
- * прозорі краї AI-картинки й вихід за канву ламають будь-яку корекцію на bounds.
+ * Reads the ACTUAL Smart Object frame via smartObjectMore.transform (8 numbers =
+ * 4 corners). This is the only truthful channel: layer.bounds returns only the
+ * area with opaque pixels INSIDE THE CANVAS (a 100×100 SO came back as 62×62),
+ * so transparent AI edges and overflow past the canvas break any bounds correction.
  */
 async function readSoFrame() {
     let res;
@@ -65,7 +66,7 @@ async function readSoFrame() {
             ],
         }], {});
     } catch (e) {
-        console.warn('[place] get layer не вдався:', e.message);
+        console.warn('[place] get layer failed:', e.message);
         return null;
     }
     const more = res && res[0] && res[0].smartObjectMore;
@@ -74,10 +75,10 @@ async function readSoFrame() {
     if (q.some(v => typeof v !== 'number' || !isFinite(v))) return null;
     const xs = [q[0], q[2], q[4], q[6]], ys = [q[1], q[3], q[5], q[7]];
 
-    // Перекіс = transform РОЗБІГАЄТЬСЯ з nonAffineTransform. Сама присутність
-    // ключа ознакою не є: виміряно в PS 27.5 — одразу після чистого place
-    // nonAffineTransform побайтово дублює transform. Перевірка на !!more.
-    // nonAffineTransform давала б хибне попередження на КОЖНІЙ вставці.
+    // Skew means transform DIVERGES from nonAffineTransform. The mere presence
+    // of the key is not a signal: measured in PS 27.5 — right after a clean place,
+    // nonAffineTransform duplicates transform byte for byte. A check on !!more.
+    // nonAffineTransform would warn falsely on EVERY insertion.
     let skewed = false;
     if (more.nonAffineTransform && more.nonAffineTransform.length >= 8) {
         const n = Array.prototype.slice.call(more.nonAffineTransform, 0, 8).map(unwrap);
@@ -93,8 +94,8 @@ async function readSoFrame() {
     };
 }
 
-/** Резервний канал, коли smartObjectMore недоступний. Правдивий лише поки шар
- *  повністю в канві й непрозорий — тому позначаємо результат як ненадійний. */
+/** Fallback channel when smartObjectMore is unavailable. Truthful only while the
+ *  layer is fully on the canvas and opaque — so the result is marked unreliable. */
 function readLayerFrameFallback(layer, doc) {
     const b = layer.bounds;
     const L = unwrap(b.left), T = unwrap(b.top), R = unwrap(b.right), B = unwrap(b.bottom);
@@ -103,29 +104,29 @@ function readLayerFrameFallback(layer, doc) {
 }
 
 /* ══════════════════════════════════════════════════════════════════════════
- *  ДВІ ПРИМІТИВИ ГЕОМЕТРІЇ. Обидві виміряні в живому Photoshop 27.5.0
- *  (див. verify/probe4.txt і verify/probe6.txt): матриця 14 кейсів
- *  × RGB8/CMYK8/CMYK16/RGB16/RGB32/Gray8 × 300 і 72 ppi дала residual 0.
+ *  TWO GEOMETRY PRIMITIVES. Both measured in live Photoshop 27.5.0
+ *  (see verify/probe4.txt and verify/probe6.txt): a matrix of 14 cases
+ *  × RGB8/CMYK8/CMYK16/RGB16/RGB32/Gray8 × 300 and 72 ppi gave residual 0.
  *
- *  ⚠️ ЧОГО ТУТ БІЛЬШЕ НЕМА І ЧОМУ. Раніше тут стояв `transform` із
- *  `rectangle`→`quadrilateral` — «абсолютне» виставлення чотирьох кутів.
- *  Виміряно: ця команда НІЧОГО НЕ РОБИТЬ. Вона не кидає помилки, повертає
- *  успіх і лишає рамку незмінною — у всіх трьох варіантах одиниць
- *  (pixelsUnit, distanceUnit, голі double). Найгірший вид відмови: ні
- *  винятком, ні статичною перевіркою не ловиться, лише виміром after-стану.
+ *  WHAT IS NO LONGER HERE, AND WHY. This used to be a `transform` from
+ *  `rectangle`→`quadrilateral` — an "absolute" placement of four corners.
+ *  Measured: that command DOES NOTHING. It throws no error, returns success,
+ *  and leaves the frame unchanged — in all three unit variants
+ *  (pixelsUnit, distanceUnit, bare doubles). The worst kind of failure: it is
+ *  caught neither by an exception nor by a static check, only by measuring the after-state.
  * ═════════════════════════════════════════════════════════════════════════ */
 
 /**
- * Масштаб у ВІДСОТКАХ від поточної рамки, центр — QCSAverage.
- * Відсоток тут не є джерелом накопичення похибки, бо `pw` рахується не від
- * припущення, а від ЩОЙНО ВИМІРЯНОЇ рамки, і після кроку рамка міряється знову.
- * Photoshop сам прилипає до цілого пікселя: рамка 245.76 при pw=81.7871 %
- * дала рівно 201 (виміряно в RGB 16-біт 72 ppi).
+ * Scale in PERCENT of the current frame, center QCSAverage.
+ * The percent is not a source of accumulated error here, because `pw` is computed
+ * not from an assumption but from the frame JUST MEASURED, and the frame is
+ * measured again after the step. Photoshop snaps to a whole pixel itself: a
+ * frame of 245.76 at pw=81.7871% became exactly 201 (measured in RGB 16-bit 72 ppi).
  */
 async function scaleSo(pw, ph) {
-    // на збільшенні Smoother, на зменшенні Sharper — Photoshop застосовує
-    // інтерполяцію до НАТИВНОГО растру SO (size лишався 1024×1024 навіть при
-    // масштабі 0.0977 %), тому повторні виклики не деградують якість
+    // Smoother when scaling up, Sharper when scaling down — Photoshop applies
+    // interpolation to the SO's NATIVE raster (size stayed 1024×1024 even at
+    // a scale of 0.0977%), so repeated calls do not degrade quality
     const interp = (pw >= 100 || ph >= 100) ? 'bicubicSmoother' : 'bicubicSharper';
     await batchPlay([{
         _obj: 'transform',
@@ -139,16 +140,16 @@ async function scaleSo(pw, ph) {
 }
 
 /**
- * Зсув шару в ПІКСЕЛЯХ.
+ * Moves the layer in PIXELS.
  *
- * ⚠️ Одиниці критичні. `distanceUnit` (charID `#Rlt`) — це ПУНКТИ (1/72″), і
- * Photoshop перераховує їх через ppi документа: запит на −567 у 300-ppi
- * документі давав −2362 = −567 × 300/72. `pixelsUnit` коректний і на 300, і
- * на 72 ppi — перевірено окремо на обох.
+ * Units are critical. `distanceUnit` (charID `#Rlt`) is POINTS (1/72″), and
+ * Photoshop converts them through the document ppi: a request of −567 in a
+ * 300 ppi document produced −2362 = −567 × 300/72. `pixelsUnit` is correct at
+ * both 300 and 72 ppi — checked separately on both.
  *
- * Дробові дельти не підтримуються: move(0.25, −0.75) фактично дав (0, −1).
- * Тому округляємо явно — це семантика API, а не втрата точності: після
- * масштабування рамка вже ціла, тому дельта теж ціла.
+ * Fractional deltas are not supported: move(0.25, −0.75) actually produced (0, −1).
+ * So we round explicitly — that is API semantics, not a loss of precision: after
+ * scaling the frame is already integer, so the delta is integer too.
  */
 async function moveSo(dx, dy, layer) {
     const h = Math.round(dx), v = Math.round(dy);
@@ -161,13 +162,13 @@ async function moveSo(dx, dy, layer) {
             _options: { dialogOptions: 'dontDisplay' },
         }], {});
     } catch (e) {
-        // резерв на DOM — виміряно як рівноцінний
+        // DOM fallback — measured as equivalent
         if (layer) await layer.translate(h, v);
         else throw e;
     }
 }
 
-/* ── Преференс «Resize Image During Place» ─────────────────────────────────── */
+/* ── "Resize Image During Place" preference ────────────────────────────────── */
 const PREF_TARGET = [
     { _ref: 'property', _property: 'generalPreferences' },
     { _ref: 'application', _enum: 'ordinal', _value: 'targetEnum' },
@@ -184,19 +185,19 @@ async function setResizeDuringPlace(value) {
         await batchPlay([{ _obj: 'set', _target: PREF_TARGET,
             to: { _obj: 'generalPreferences', resizePastePlace: value } }], {});
         return true;
-    } catch (e) { console.warn('[place] преференс resizePastePlace не змінився:', e.message); return false; }
+    } catch (e) { console.warn('[place] resizePastePlace preference did not change:', e.message); return false; }
 }
 
-/* Геометрія — у geometry.js (чистий модуль, протестований у node на 9 випадках). */
+/* Geometry lives in geometry.js (a pure module, tested in node on 9 cases). */
 const { integerTarget, insetBlendRadius, planFrame } = require('./geometry.js');
 
 /* ══════════════════════════════════════════════════════════════════════════
- *  ГОЛОВНА ФУНКЦІЯ
- *  b64        — PNG або JPEG у base64 від провайдера (Gemini дає лише JPEG)
- *  bounds     — межі виділення в пікселях документа (можуть бути дробові)
- *  channelName— альфа-канал зі збереженим виділенням; null = прямокутна маска
- *  opts.maskBounds — початкові межі виділення для гарантованого fallback
- *  Викликати ВСЕРЕДИНІ core.executeAsModal.
+ *  MAIN FUNCTION
+ *  b64        — PNG or JPEG in base64 from the provider (Gemini returns JPEG only)
+ *  bounds     — selection bounds in document pixels (may be fractional)
+ *  channelName— alpha channel with the saved selection; null = rectangular mask
+ *  opts.maskBounds — original selection bounds for a guaranteed fallback
+ *  Call INSIDE core.executeAsModal.
  * ═════════════════════════════════════════════════════════════════════════ */
 async function placeGeneratedSmartObject(b64, bounds, channelName, opts = {}) {
     const maskFeather = Math.max(0, Number(opts.maskFeather) || 0);
@@ -214,12 +215,12 @@ async function placeGeneratedSmartObject(b64, bounds, channelName, opts = {}) {
 
     let tempFile = null;
     let prefWas = null;
-    const disposables = [];      // інваріант: усе, що має dispose(), йде сюди
+    const disposables = [];      // invariant: everything with dispose() goes here
     const report = { mode: dst.mode, nat, target, applied: null, residual: null, warnings: [] };
 
     try {
-        /* 1. Файл на диск + session token. Байти йдуть у Photoshop файлом —
-              imaging API не задіяний узагалі, тому CMYK/16/32 біт безпечні. */
+        /* 1. File on disk + session token. The bytes enter Photoshop as a file —
+              the imaging API is not involved at all, so CMYK/16/32 bit is safe. */
         const fs = uxpStorage.localFileSystem;
         const folder = await fs.getTemporaryFolder();
         tempFile = await folder.createFile(`ai_${Date.now()}_${Math.floor(Math.random() * 1e4)}.${file.ext}`,
@@ -229,15 +230,15 @@ async function placeGeneratedSmartObject(b64, bounds, channelName, opts = {}) {
             { format: uxpStorage.formats.binary });
         const token = fs.createSessionToken(tempFile);
 
-        /* 2. Гасимо fit-to-canvas: він ЗМЕНШУЄ все, що не влазить у канву.
-              Не критично для точності (корекція нижче все одно виправить),
-              але без нього SO може приїхати обрізаним по канві. */
+        /* 2. Turn off fit-to-canvas: it SHRINKS anything that does not fit the canvas.
+              Not critical for accuracy (the correction below fixes it anyway),
+              but without this the SO can arrive cropped to the canvas. */
         prefWas = await getResizeDuringPlace();
         if (prefWas === true) await setResizeDuringPlace(false);
 
-        /* 3. Place. Позицію й масштаб НЕ намагаємось задати — вони все одно
-              залежать від pHYs, преференсів і канви. Нам важливо лише, щоб шар
-              з'явився як Smart Object із нативним растром усередині. */
+        /* 3. Place. Do NOT try to set position and scale — they depend on
+              pHYs, preferences, and the canvas anyway. What matters is that the
+              layer appears as a Smart Object with the native raster inside. */
         await batchPlay([{
             _obj: 'placeEvent',
             null: { _path: token, _kind: 'local' },
@@ -251,40 +252,40 @@ async function placeGeneratedSmartObject(b64, bounds, channelName, opts = {}) {
         if (!layer) throw new Error(placeI18n.t('place.noLayer'));
         try { layer.name = `AI ${new Date().toLocaleTimeString()}`; } catch (e) {}
 
-        /* 4. Скидання трансформацій до нативного 1:1. Виміряно: команда дає
-              рівно нативну ширину (4266.667 → 1024) і ПРИ ЦЬОМУ рухає шар —
-              нам байдуже, бо крок 5 міряє після. Користь у тому, що вона
-              нормалізує і PPI-масштабування, і fit-to-canvas, тому відсоток
-              на кроці 5 рахується від нативного растру, а не від обрізаного. */
+        /* 4. Reset transforms to native 1:1. Measured: the command produces
+              exactly the native width (4266.667 → 1024) AND moves the layer —
+              we do not care, because step 5 measures afterwards. The benefit is
+              that it normalizes both PPI scaling and fit-to-canvas, so the percent
+              in step 5 is computed from the native raster, not from a cropped one. */
         try {
             await batchPlay([{ _obj: 'placedLayerResetTransforms',
                 _options: { dialogOptions: 'dontDisplay' } }], {});
-        } catch (e) { report.warnings.push('placedLayerResetTransforms недоступний'); }
+        } catch (e) { report.warnings.push('placedLayerResetTransforms unavailable'); }
 
-        /* 5. ЗАМИКАННЯ ЗВОРОТНОГО ЗВ'ЯЗКУ: виміряти → масштаб від виміряного →
-              виміряти → зсув від виміряного → виміряти. Ніде не використовується
-              жодна ПЕРЕДБАЧЕНА величина; кожна дія рахується від щойно
-              прочитаної рамки. Виміряно на матриці 14 кейсів: одного проходу
-              досить у всіх, другий залишений як страховка. */
+        /* 5. FEEDBACK LOOP: measure → scale from the measurement →
+              measure → move from the measurement → measure. No PREDICTED
+              value is used anywhere; every action is computed from the frame
+              just read. Measured on a matrix of 14 cases: one pass is enough
+              in all of them; the second is left as insurance. */
         const measure = async () => {
             let f = await readSoFrame();
             if (f) {
-                // Гейт правдоподібності: рамка мусить бути ненульова і в межах
-                // ±2 канви. Якщо smartObjectMore колись почне віддавати не
-                // координати документа — виявиться тут, і ми чесно перейдемо
-                // на резервний канал, а не тихо поставимо шар не туди.
+                // Plausibility gate: the frame must be non-zero and within
+                // ±2 canvases. If smartObjectMore ever starts returning something
+                // other than document coordinates, it shows up here, and we honestly
+                // switch to the fallback channel instead of quietly placing the layer wrong.
                 const w = f.right - f.left, h = f.bottom - f.top;
                 const sane = w > 0.005 && h > 0.005
                     && f.left > -3 * doc.width && f.right < 4 * doc.width
                     && f.top > -3 * doc.height && f.bottom < 4 * doc.height;
                 if (!sane) {
-                    report.warnings.push('smartObjectMore.transform неправдоподібний — резерв на layer.bounds');
+                    report.warnings.push('smartObjectMore.transform implausible — falling back to layer.bounds');
                     f = null;
                 }
             }
             if (!f) {
                 f = readLayerFrameFallback(layer, doc);
-                if (f.unreliable) report.warnings.push('layer.bounds обрізаний канвою — точність не гарантована');
+                if (f.unreliable) report.warnings.push('layer.bounds clipped by the canvas — accuracy is not guaranteed');
             }
             return f;
         };
@@ -303,7 +304,7 @@ async function placeGeneratedSmartObject(b64, bounds, channelName, opts = {}) {
         for (let pass = 0; pass < 2 && !hit(cur); pass++) {
             const cw = cur.right - cur.left, ch = cur.bottom - cur.top;
             if (cw < 0.005 || ch < 0.005) {
-                report.warnings.push(`рамка виродилась (${cw}×${ch}) — масштаб пропущено`);
+                report.warnings.push(`frame degenerated (${cw}×${ch}) — scale skipped`);
                 break;
             }
             const pw = tw / cw * 100, ph = th / ch * 100;
@@ -320,10 +321,10 @@ async function placeGeneratedSmartObject(b64, bounds, channelName, opts = {}) {
             dw: +(tw - (cur.right - cur.left)).toFixed(3),
             dh: +(th - (cur.bottom - cur.top)).toFixed(3),
         };
-        if (cur.skewed) report.warnings.push('SO має неафінний трансформ (transform ≠ nonAffineTransform)');
+        if (cur.skewed) report.warnings.push('SO has a non-affine transform (transform ≠ nonAffineTransform)');
 
-        /* 6. Маска шару: показуємо рівно виділення. Для cover це ще й обріз
-              надлишку; для exact — захист від субпіксельного краю. */
+        /* 6. Layer mask: show exactly the selection. For cover this also crops
+              the overflow; for exact it protects against a subpixel edge. */
         const maskTarget = integerTarget(opts.maskBounds || target);
         const maskApplied = await applySelectionMask(channelName, maskTarget, maskFeather);
         report.mask = { applied: maskApplied, source: channelName ? 'selection' : 'rectangle',
@@ -334,12 +335,12 @@ async function placeGeneratedSmartObject(b64, bounds, channelName, opts = {}) {
         return report;
 
     } catch (e) {
-        console.error('[place] помилка:', e && e.message);
+        console.error('[place] error:', e && e.message);
         throw e;
     } finally {
-        // У цьому шляху disposables лишається порожнім — і це головна перемога:
-        // ImageData на вставці не створюється взагалі, тому нема чому текти й
-        // нема чому падати в CMYK. finally стоїть як інваріант на майбутнє.
+        // On this path disposables stays empty — and that is the main win:
+        // ImageData is never created on insert, so there is nothing to leak and
+        // nothing to crash in CMYK. finally stays as an invariant for later.
         for (const d of disposables) { try { d.dispose(); } catch (e) {} }
         if (prefWas === true) { try { await setResizeDuringPlace(true); } catch (e) {} }
         if (tempFile) { try { await tempFile.delete(); } catch (e) {} }
@@ -347,18 +348,18 @@ async function placeGeneratedSmartObject(b64, bounds, channelName, opts = {}) {
 }
 
 /**
- * Відновлює виділення з альфа-каналу (резерв — прямокутник) і робить маску.
- * Повертає true лише коли команда створення layer mask справді виконалась.
+ * Restores the selection from an alpha channel (fallback: a rectangle) and builds the mask.
+ * Returns true only when the layer-mask creation command actually ran.
  *
- * feather — ширина ВНУТРІШНЬОГО переходу маски в пікселях. Це ДРУГА маска,
- * не та, що йде в OpenAI: request-маску Gemini не приймає взагалі, а ця
- * працює на боці Photoshop для обох провайдерів.
+ * feather is the width of the INNER mask transition in pixels. This is the SECOND
+ * mask, not the one sent to OpenAI: Gemini does not accept a request mask at all,
+ * and this one runs on the Photoshop side for both providers.
  *
- * Важливо: звичайний feather симетричний і виходить за межу виділення. Якщо
- * контекст навколо вужчий за feather, напівпрозора маска доходить до фізичного
- * краю Smart Object і там виникає новий різкий шов. Тому contract + feather
- * розміщує весь перехід ВСЕРЕДИНІ початкової області: на її межі AI-шар уже
- * повністю прихований, а в центрі лишається повністю непрозорим.
+ * A plain feather is symmetric and extends past the selection. If the surrounding
+ * context is narrower than the feather, the semi-transparent mask reaches the
+ * physical edge of the Smart Object and a new hard seam appears there. So
+ * contract + feather places the whole transition INSIDE the original area: at
+ * its edge the AI layer is already fully hidden, and the center stays fully opaque.
  */
 async function applySelectionMask(channelName, target, feather = 0) {
     const restore = async () => {
@@ -368,7 +369,7 @@ async function applySelectionMask(channelName, target, feather = 0) {
                 await app.activeDocument.selection.load(channel, constants.SelectionType.REPLACE);
                 return true;
             } catch (e) {
-                console.warn('[place] selection-канал не відновився, беру прямокутник:', e.message);
+                console.warn('[place] selection channel did not restore, using a rectangle:', e.message);
             }
         }
         try {
@@ -378,18 +379,18 @@ async function applySelectionMask(channelName, target, feather = 0) {
             }, constants.SelectionType.REPLACE, 0, false);
             return true;
         } catch (e) {
-            console.error('[place] прямокутне виділення для маски не створилось:', e.message);
+            console.error('[place] rectangular selection for the mask was not created:', e.message);
             return false;
         }
     };
     if (!await restore()) return;
     if (feather > 0) {
-        // Використовуємо офіційний DOM API (PS 25+), а не сирий batchPlay
-        // `_obj: feather`. Останній у PS 27.5 показував системний діалог
-        // «Команда Растушевка сейчас недоступна», навіть коли помилку ловив catch.
+        // Use the official DOM API (PS 25+), not a raw batchPlay
+        // `_obj: feather`. The latter showed a system dialog in PS 27.5,
+        // "The Feather command is currently unavailable", even when catch caught the error.
         //
-        // Стискаємо selection перед feather, щоб зовнішній край градієнта
-        // закінчився на початковій межі, а не звисав до краю Smart Object.
+        // Contract the selection before feather so the outer edge of the gradient
+        // ends on the original boundary instead of hanging to the Smart Object edge.
         try {
             const sel = app.activeDocument.selection;
             const b = sel && sel.bounds;
@@ -398,14 +399,14 @@ async function applySelectionMask(channelName, target, feather = 0) {
                 if (radius >= 1) {
                     await sel.contract(radius, true);
                     await sel.feather(radius, true);
-                    console.log(`[place] внутрішнє змішування: ${radius * 2} px ` +
+                    console.log(`[place] inner blend: ${radius * 2} px ` +
                                 `(contract ${radius} + feather ${radius})`);
                 }
             }
         } catch (e) {
-            // contract міг змінити selection до помилки feather — відновлюємо
-            // вихідну форму, щоб не створити випадково обрізану маску.
-            console.warn('[place] внутрішнє змішування не вдалось:', e.message);
+            // contract may have changed the selection before feather failed — restore
+            // the original shape so we do not accidentally create a cropped mask.
+            console.warn('[place] inner blend failed:', e.message);
             await restore();
         }
     }
@@ -414,7 +415,7 @@ async function applySelectionMask(channelName, target, feather = 0) {
             at: { _ref: 'channel', _enum: 'channel', _value: 'mask' },
             using: { _enum: 'userMaskEnabled', _value: 'revealSelection' } }], {});
     } catch (e) {
-        console.error('[place] маска не створилась:', e.message);
+        console.error('[place] mask was not created:', e.message);
         return false;
     }
     await restore();
@@ -424,7 +425,7 @@ async function applySelectionMask(channelName, target, feather = 0) {
 module.exports = {
     placeGeneratedSmartObject,
     withPixels,
-    // реекспорт для зручності викликачів — реалізації в png.js / geometry.js
+    // re-export for callers — the implementations live in png.js / geometry.js
     setPngResolution, readPngSize,
     integerTarget, planFrame,
 };

@@ -1,21 +1,21 @@
 /* ============================================================================
- *  png.js — мінімальний PNG-кодер із СПРАВЖНІМ deflate.
+ *  png.js — a minimal PNG encoder with REAL deflate.
  *
- *  Чому не взяти старий encodeMaskPNG: він писав deflate STORED-блоками, тобто
- *  без стиснення. Маска 1024×1024 RGBA виходила 4 195 659 B ≈ 4.00 MiB, а ліміт
- *  OpenAI на маску — «less than 4MB». Тобто робоче вікно було ≈655 360…1 040 000
- *  пікселів і все; для 2048×1536 маска важила ~12 МБ і запит гарантовано падав.
+ *  Why not the old encodeMaskPNG: it wrote deflate STORED blocks, meaning no
+ *  compression. A 1024×1024 RGBA mask came out at 4,195,659 B ≈ 4.00 MiB, and
+ *  OpenAI's mask limit is "less than 4MB". So the working window was about
+ *  655,360…1,040,000 pixels and that was it; a 2048×1536 mask weighed ~12 MB
+ *  and the request was guaranteed to fail.
  *
- *  Тут fixed-Huffman deflate з RLE-матчами. Для маски (величезні однорідні
- *  області) дає стиснення в сотні разів. Жодних залежностей.
+ *  This is fixed-Huffman deflate with RLE matches. For a mask (huge uniform
+ *  areas) it compresses hundreds of times. No dependencies.
  *
- *  Чистий модуль: без require('photoshop'), тестується в node через
- *  zlib.inflateSync.
+ *  A pure module: no require('photoshop'), tested in node via zlib.inflateSync.
  * ========================================================================== */
 
 const pngI18n = require('./i18n.js');
 
-/* ── CRC32 / біти ──────────────────────────────────────────────────────────── */
+/* ── CRC32 / bits ──────────────────────────────────────────────────────────── */
 
 const CRC_TABLE = (() => {
     const t = new Uint32Array(256);
@@ -48,21 +48,21 @@ function w32(a, o, v) {
 }
 
 /**
- * Бітовий письменник для deflate.
- * Тонкість, на якій легко зламатися: у deflate службові біти пишуться
- * LSB-first, а Huffman-коди — MSB-first («packed starting with the most
- * significant bit of the code»). Тому два різні методи.
+ * Bit writer for deflate.
+ * The subtlety that is easy to get wrong: in deflate control bits are written
+ * LSB-first, and Huffman codes MSB-first ("packed starting with the most
+ * significant bit of the code"). That is why there are two methods.
  */
 class BitWriter {
     constructor() { this.bytes = []; this.cur = 0; this.n = 0; }
-    /** Службові поля: молодшим бітом уперед. */
+    /** Control fields: least significant bit first. */
     bits(value, count) {
         for (let i = 0; i < count; i++) {
             this.cur |= ((value >>> i) & 1) << this.n;
             if (++this.n === 8) { this.bytes.push(this.cur); this.cur = 0; this.n = 0; }
         }
     }
-    /** Huffman-код: старшим бітом уперед. */
+    /** Huffman code: most significant bit first. */
     code(value, count) {
         for (let i = count - 1; i >= 0; i--) {
             this.cur |= ((value >>> i) & 1) << this.n;
@@ -73,22 +73,22 @@ class BitWriter {
     out() { this.align(); return Uint8Array.from(this.bytes); }
 }
 
-/* ── Таблиці fixed Huffman (RFC 1951, §3.2.5-3.2.6) ────────────────────────── */
+/* ── Fixed Huffman tables (RFC 1951, §3.2.5-3.2.6) ─────────────────────────── */
 
-// Довжини 3..258 → код 257..285 + додаткові біти
+// Lengths 3..258 → code 257..285 + extra bits
 const LEN_BASE  = [3,4,5,6,7,8,9,10,11,13,15,17,19,23,27,31,35,43,51,59,67,83,99,115,131,163,195,227,258];
 const LEN_EXTRA = [0,0,0,0,0,0,0,0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4,  4,  5,  5,  5,  5,  0];
-// Дистанції 1..32768 → код 0..29 + додаткові біти
+// Distances 1..32768 → code 0..29 + extra bits
 const DIST_BASE  = [1,2,3,4,5,7,9,13,17,25,33,49,65,97,129,193,257,385,513,769,1025,1537,2049,3073,4097,6145,8193,12289,16385,24577];
 const DIST_EXTRA = [0,0,0,0,1,1,2, 2, 3, 3, 4, 4, 5, 5,  6,  6,  7,  7,  8,  8,   9,   9,  10,  10,  11,  11,  12,   12,   13,   13];
 
-/** Літерал у fixed Huffman. */
+/** A literal in fixed Huffman. */
 function putLiteral(bw, b) {
     if (b <= 143) bw.code(0x30 + b, 8);           // 00110000..10111111
     else          bw.code(0x190 + (b - 144), 9);  // 110010000..111111111
 }
 
-/** Довжина match'у. */
+/** Length of a match. */
 function putLength(bw, len) {
     let i = LEN_BASE.length - 1;
     while (LEN_BASE[i] > len) i--;
@@ -98,15 +98,15 @@ function putLength(bw, len) {
     if (LEN_EXTRA[i]) bw.bits(len - LEN_BASE[i], LEN_EXTRA[i]);
 }
 
-/** Найбільша відстань, на яку дозволено посилатися: вікно deflate — 32 КіБ. */
+/** Largest distance a back-reference may use: the deflate window is 32 KiB. */
 const MAX_DIST = 32768;
 
-/** Дистанція match'у — у fixed Huffman коди дистанцій рівно 5 біт. */
+/** Match distance — in fixed Huffman, distance codes are exactly 5 bits. */
 function putDistance(bw, dist) {
-    // Не тиха деградація, а виняток: за вікном putDistance писав би обрізане
-    // число, і потік ставав невалідним лише для розпаковувача — помилка
-    // спливала аж на adler32, за кілометр від причини.
-    if (dist < 1 || dist > MAX_DIST) throw new Error(`deflate: distance ${dist} поза вікном 1..${MAX_DIST}`);
+    // Not a silent degradation, an exception: past the window putDistance would
+    // write a truncated number, and the stream would be invalid only for the
+    // inflater — the error would surface at adler32, far from the cause.
+    if (dist < 1 || dist > MAX_DIST) throw new Error(`deflate: distance ${dist} outside the window 1..${MAX_DIST}`);
     let i = DIST_BASE.length - 1;
     while (DIST_BASE[i] > dist) i--;
     bw.code(i, 5);
@@ -114,25 +114,25 @@ function putDistance(bw, dist) {
 }
 
 /**
- * deflate у fixed-Huffman режимі з RLE-матчами.
+ * Deflate in fixed-Huffman mode with RLE matches.
  *
- * Свідоме обмеження: шукаємо повтори лише з distance = 1 (той самий байт) і
- * distance = rowStride (той самий байт у попередньому рядку). Для маски й
- * будь-якого зображення з однорідними рядками цього достатньо, а повний LZ77
- * із хеш-таблицею тут — зайвий ризик помилки. Дані завжди коректні: у
- * найгіршому разі виродиться в літерали, тобто в розмір stored + службові біти.
+ * A deliberate limit: we look for repeats only at distance = 1 (the same byte)
+ * and distance = rowStride (the same byte in the previous row). For a mask and
+ * any image with uniform rows that is enough, and a full LZ77 with a hash
+ * table would be extra risk of a bug. The data is always valid: the worst case
+ * degenerates to literals, that is stored size plus control bits.
  *
  * @param {Uint8Array} data
- * @param {number} rowStride — довжина рядка в байтах разом із байтом фільтра
+ * @param {number} rowStride — row length in bytes including the filter byte
  */
 function deflateRle(data, rowStride) {
-    /* ⚠️ РЕГРЕСІЯ, ЯКУ ТУТ ЗАКРИТО: рядок ширший за вікно deflate (32 КіБ)
-       посилатися на попередній рядок не може — це заборонено форматом, а не
-       нашим вибором. Раніше ми все одно пробували, putDistance писав обрізану
-       відстань, і PNG виходив побитим. Реально це ловилося на панорамних
-       полотнах: маска від 8192 px завширшки (RGBA) і вхід від 10923 px (RGB).
-       Тепер для таких рядків лишається лише match на відстані 1 — для маски
-       з довгими однорідними прогонами він і дає майже все стиснення. */
+    /* THE REGRESSION THIS CLOSES: a row wider than the deflate window (32 KiB)
+       cannot refer to the previous row — the format forbids it, it is not our
+       choice. We used to try anyway, putDistance wrote a truncated distance,
+       and the PNG came out corrupt. In practice this showed up on panoramic
+       canvases: a mask from 8192 px wide (RGBA) and input from 10923 px (RGB).
+       For such rows only a match at distance 1 remains — for a mask with long
+       uniform runs that is almost all of the compression. */
     const rowDist = (rowStride > 0 && rowStride <= MAX_DIST) ? rowStride : 0;
 
     const bw = new BitWriter();
@@ -144,13 +144,13 @@ function deflateRle(data, rowStride) {
     while (i < n) {
         let bestLen = 0, bestDist = 0;
 
-        // повтор того самого байта
+        // repeat of the same byte
         if (i > 0 && i + 3 <= n && data[i] === data[i - 1]) {
             let l = 0;
             while (l < 258 && i + l < n && data[i + l] === data[i - 1]) l++;
             if (l >= 3) { bestLen = l; bestDist = 1; }
         }
-        // повтор рядка вище — саме він дає основне стиснення на масках
+        // repeat of the row above — this is what compresses masks
         if (rowDist > 0 && i >= rowDist) {
             let l = 0;
             while (l < 258 && i + l < n && data[i + l] === data[i + l - rowDist]) l++;
@@ -166,11 +166,11 @@ function deflateRle(data, rowStride) {
             i++;
         }
     }
-    bw.code(0, 7);   // символ 256 = кінець блоку
+    bw.code(0, 7);   // symbol 256 = end of block
 
     const body = bw.out();
     const out = new Uint8Array(2 + body.length + 4);
-    out[0] = 0x78; out[1] = 0x01;            // zlib header (CMF/FLG, ділиться на 31)
+    out[0] = 0x78; out[1] = 0x01;            // zlib header (CMF/FLG, divisible by 31)
     out.set(body, 2);
     w32(out, 2 + body.length, adler32(data));
     return out;
@@ -203,8 +203,8 @@ function concat(parts) {
 }
 
 /**
- * Кодує PNG із сирих компонент.
- * @param {Uint8Array} pixels — chunky, components байтів на піксель
+ * Encodes a PNG from raw components.
+ * @param {Uint8Array} pixels — chunky, `components` bytes per pixel
  * @param {number} components 1=Grey, 2=Grey+A, 3=RGB, 4=RGBA
  */
 function encodePng(pixels, width, height, components) {
@@ -216,7 +216,7 @@ function encodePng(pixels, width, height, components) {
     const stride   = rowBytes + 1;
     const raw = new Uint8Array(height * stride);
     for (let y = 0; y < height; y++) {
-        raw[y * stride] = 0;                    // фільтр None: RLE нижче й так ловить рядки
+        raw[y * stride] = 0;                    // filter None: the RLE below catches rows anyway
         raw.set(pixels.subarray(y * rowBytes, (y + 1) * rowBytes), y * stride + 1);
     }
 
@@ -232,7 +232,7 @@ function encodePng(pixels, width, height, components) {
     ]);
 }
 
-/** Розміри з IHDR. Єдине джерело істини про пікселі відповіді провайдера. */
+/** Size from IHDR. The single source of truth for the provider response's pixels. */
 function readPngSize(png) {
     if (png.length < 24) throw new Error(pngI18n.t('png.tooShort'));
     for (let i = 0; i < 8; i++) {
@@ -243,19 +243,19 @@ function readPngSize(png) {
 }
 
 /**
- * Вписує роздільність у чанк pHYs.
+ * Writes resolution into the pHYs chunk.
  *
- * Навіщо: Place Embedded масштабує вміст на docPPI/filePPI — це задокументована
- * поведінка «by design». PNG від провайдера чанка pHYs не має, тому Photoshop
- * вважає його 72 ppi і в 300-ppi документі роздуває до 416.7 %. Рівна
- * роздільність робить коефіцієнт 1, і корекція геометрії стає косметичною.
+ * Why: Place Embedded scales content by docPPI/filePPI — documented behavior
+ * "by design". A provider PNG has no pHYs chunk, so Photoshop treats it as
+ * 72 ppi and in a 300 ppi document inflates it to 416.7%. Matching resolution
+ * makes the factor 1, and the geometry correction becomes cosmetic.
  *
- * pHYs за спекою — один раз і ДО першого IDAT, тому існуючий перезаписуємо.
+ * By spec pHYs appears once and BEFORE the first IDAT, so an existing one is overwritten.
  */
 function setPngResolution(png, ppi) {
     const ppm = Math.max(1, Math.round(ppi * 39.3700787));   // 300 ppi → 11811 px/m
     const data = new Uint8Array(9);
-    w32(data, 0, ppm); w32(data, 4, ppm); data[8] = 1;       // unit = 1 (метр)
+    w32(data, 0, ppm); w32(data, 4, ppm); data[8] = 1;       // unit = 1 (metre)
 
     const rd = o => ((png[o] << 24) | (png[o + 1] << 16) | (png[o + 2] << 8) | png[o + 3]) >>> 0;
     let off = 8, insertAt = -1;
@@ -263,7 +263,7 @@ function setPngResolution(png, ppi) {
         const len  = rd(off);
         const type = String.fromCharCode(png[off + 4], png[off + 5], png[off + 6], png[off + 7]);
         if (type === 'pHYs') {
-            if (len !== 9) return png;                        // побитий чанк — не гіршаємо
+            if (len !== 9) return png;                        // broken chunk — do not make it worse
             const out = png.slice();
             out.set(data, off + 8);
             w32(out, off + 8 + len, crc32(out.subarray(off + 4, off + 8 + len)));
@@ -283,28 +283,28 @@ function setPngResolution(png, ppi) {
 }
 
 /**
- * Маска inpainting для прямокутної області.
- * Домовленість OpenAI: alpha = 0 (прозорий) — «змінити тут»;
- * alpha = 255 (непрозорий) — «зберегти як контекст».
+ * Inpainting mask for a rectangular area.
+ * OpenAI's convention: alpha = 0 (transparent) — "change here";
+ * alpha = 255 (opaque) — "keep as context".
  *
- * Grey+Alpha (2 байти/піксель) замість RGBA — удвічі менше даних до deflate,
- * а сірий канал провайдером усе одно не читається.
+ * Grey+Alpha (2 bytes/pixel) instead of RGBA — half the data into deflate,
+ * and the provider does not read the grey channel anyway.
  *
- * feather — ширина градієнта В ПІКСЕЛЯХ, симетрична навколо межі
- * (feather/2 назовні, feather/2 всередину). Жорсткий край дає видимий шов:
- * модель малює до самої лінії, і різниця в зерні/освітленні читається як рубець.
- * Плавний перехід змушує її змішувати з контекстом.
+ * feather is the gradient width IN PIXELS, symmetric around the edge
+ * (feather/2 outside, feather/2 inside). A hard edge makes a visible seam:
+ * the model paints up to the line, and a difference in grain or light reads as a scar.
+ * A smooth transition forces it to blend with the context.
  *
- * Стиснення від градієнта майже не страждає: RLE ловить рядки, а неоднорідна
- * смуга — лише по периметру.
+ * Compression barely suffers from the gradient: RLE catches the rows, and the
+ * non-uniform band is only around the perimeter.
  *
- * @param {{left,top,right,bottom}} rect — у координатах маски, не документа
- * @param {number} feather — 0 = жорсткий край
+ * @param {{left,top,right,bottom}} rect — in mask coordinates, not document coordinates
+ * @param {number} feather — 0 = hard edge
  */
 /**
- * Розмиття «коробкою», розділене по осях: три проходи наближають гаус, і все
- * це лишається O(n) — на масці 1.3 Мп це мілісекунди, тоді як чесна відстань
- * до контуру коштувала б секунди в JS.
+ * A box blur, separated by axis: three passes approximate a Gaussian, and it
+ * stays O(n) — on a 1.3 MP mask that is milliseconds, while a true distance
+ * to the contour would cost seconds in JS.
  */
 function blurAxis(src, dst, w, h, r, vertical) {
     const outer = vertical ? w : h;
@@ -328,7 +328,7 @@ function boxBlur(src, w, h, radius) {
     const a = new Uint8Array(w * h);
     const b = new Uint8Array(w * h);
     a.set(src);
-    // три проходи коробкою ≈ гаус; кожен розділений на дві осі, разом O(n)
+    // three box passes ≈ Gaussian; each split into two axes, O(n) overall
     for (let pass = 0; pass < 3; pass++) {
         blurAxis(a, b, w, h, r, false);
         blurAxis(b, a, w, h, r, true);
@@ -337,27 +337,28 @@ function boxBlur(src, w, h, radius) {
 }
 
 /**
- * Маска inpainting ДОВІЛЬНОЇ форми — з реального виділення, а не з його рамки.
+ * Inpainting mask of an ARBITRARY shape — from the real selection, not its frame.
  *
- * ⚠️ НАВІЩО ЦЕ ІСНУЄ ПОРЯД ІЗ buildRectMaskPng. До 2026-09-09 в API завжди
- * летів прямокутник, хоча Photoshop знав контур: маска ШАРУ різалася по формі,
- * а маска ЗАПИТУ — ні. Наслідок вимірювався в хості: усе, що ділило bounding
- * box із ціллю, модель мала право перемалювати, і людині, чия голова
- * потрапила в кут рамки, її стерло. Крім того, справжні пікселі всередині
- * рамки, але поза формою, віддавались моделі як «зітри» замість «ось контекст».
+ * WHY THIS EXISTS BESIDE buildRectMaskPng. Until 2026-09-09 the API always
+ * received a rectangle, even though Photoshop knew the contour: the LAYER mask
+ * was cut to the shape, the REQUEST mask was not. The consequence was measured
+ * on the host: everything that shared a bounding box with the target, the model
+ * was allowed to redraw, and a person whose head landed in a corner of the frame
+ * had it erased. Also, real pixels inside the frame but outside the shape were
+ * given to the model as "erase this" instead of "here is context".
  *
- * @param {Uint8Array} sel — w*h, 255 = «змінити тут», 0 = «зберегти як контекст»
- * @param {number} feather — повна ширина переходу в пікселях, симетрична навколо контуру
+ * @param {Uint8Array} sel — w*h, 255 = "change here", 0 = "keep as context"
+ * @param {number} feather — full transition width in pixels, symmetric around the contour
  */
 function buildShapeMaskPng(width, height, sel, feather = 0) {
     if (!sel || sel.length !== width * height) {
         throw new Error(pngI18n.t('png.emptyMask'));
     }
-    /* ⚠️ Три проходи коробкою дають видимий перехід шириною ≈3r, а не r —
-       тому радіус беремо feather/3, інакше «край 16 px» розмивав би 48.
-       І зажимаємо його половиною меншого боку самої форми: ширший градієнт
-       з'їв би її серцевину, і повністю прозорих пікселів не лишилось би
-       взагалі — модель повернула б вхід без змін. */
+    /* Three box passes give a visible transition about 3r wide, not r —
+       so the radius is feather/3, otherwise an "edge of 16 px" would blur 48.
+       And we clamp it to half the shorter side of the shape itself: a wider
+       gradient would eat its core, and no fully transparent pixels would remain
+       at all — the model would return the input unchanged. */
     let minX = width, minY = height, maxX = -1, maxY = -1;
     for (let y = 0; y < height; y++) {
         for (let x = 0; x < width; x++) {
@@ -375,12 +376,12 @@ function buildShapeMaskPng(width, height, sel, feather = 0) {
     const px = new Uint8Array(width * height * 4);
     let editable = 0;
     for (let i = 0, o = 0; i < width * height; i++, o += 4) {
-        const a = 255 - soft[i];            // alpha: 0 = змінити, 255 = зберегти
+        const a = 255 - soft[i];            // alpha: 0 = change, 255 = keep
         if (a < 128) editable++;
-        px[o] = px[o + 1] = px[o + 2] = a;  // RGB косметика, провайдер читає альфу
+        px[o] = px[o + 1] = px[o + 2] = a;  // RGB is cosmetic; the provider reads alpha
         px[o + 3] = a;
     }
-    // Порожня маска означала б «нічого не міняти» — модель повернула б вхід.
+    // An empty mask would mean "change nothing" — the model would return the input.
     if (!editable) throw new Error(pngI18n.t('png.emptyMask'));
     return encodePng(px, width, height, 4);
 }
@@ -392,59 +393,59 @@ function buildRectMaskPng(width, height, rect, feather = 0) {
     const B = Math.min(height, Math.round(rect.bottom));
     if (R <= L || B <= T) throw new Error(pngI18n.t('png.emptyMask'));
 
-    // ширший за півобласть градієнт з'їв би її цілком — тоді «змінити» не
-    // залишиться взагалі, і модель повернула б вхід без змін
+    // a gradient wider than half the area would eat it entirely — then "change"
+    // would not remain at all, and the model would return the input unchanged
     const f = Math.max(0, Math.min(feather, (R - L) / 2 - 1, (B - T) / 2 - 1));
     const half = f / 2;
 
-    // RGBA, а не «сірий + альфа»: приклад у документації OpenAI саме такий, і
-    // формат маски не варто робити екзотичнішим за потрібне — альфа тут єдине,
-    // що читає провайдер, але тип 4 уже одного разу коштував нам розслідування
+    // RGBA, not "grey + alpha": the OpenAI documentation example is exactly that,
+    // and the mask format should not be more exotic than necessary — alpha is the
+    // only channel the provider reads, but color type 4 already cost us one investigation
     const px = new Uint8Array(width * height * 4);
     for (let y = 0; y < height; y++) {
         const dy = Math.min(y - T, B - 1 - y);
         let o = y * width * 4;
         for (let x = 0; x < width; x++, o += 4) {
             const dx = Math.min(x - L, R - 1 - x);
-            const d = Math.min(dx, dy);              // >0 усередині, <0 назовні
+            const d = Math.min(dx, dy);              // >0 inside, <0 outside
             let a;
             if (f < 1) {
                 a = d >= 0 ? 0 : 255;
             } else {
-                let t = (d + half) / f;              // 0 на зовнішньому краї смуги, 1 на внутрішньому
+                let t = (d + half) / f;              // 0 at the outer edge of the band, 1 at the inner
                 t = t < 0 ? 0 : t > 1 ? 1 : t;
-                t = t * t * (3 - 2 * t);             // smoothstep — без злому на краях смуги
+                t = t * t * (3 - 2 * t);             // smoothstep — no kink at the band edges
                 a = Math.round(255 * (1 - t));
             }
-            px[o] = px[o + 1] = px[o + 2] = a;   // RGB: косметика, провайдер його не читає
-            px[o + 3] = a;                       // alpha: 0 = змінити, 255 = зберегти
+            px[o] = px[o + 1] = px[o + 2] = a;   // RGB: cosmetic, the provider does not read it
+            px[o + 3] = a;                       // alpha: 0 = change, 255 = keep
         }
     }
     return encodePng(px, width, height, 4);
 }
 
-/* ── JPEG відповіді ─────────────────────────────────────────────────────────
+/* ── Response JPEG ───────────────────────────────────────────────────────────
  *
- * ⚠️ Gemini `generateContent` віддає ЛИШЕ JPEG (виміряно 2026-10-08):
- * enum `responseFormat.image.mimeType` приймає `IMAGE_JPEG` і відкидає будь-яку
- * назву PNG, а в `imageConfig` поля формату немає зовсім. Попросити PNG
- * неможливо — тому вставка мусить знати другий формат.
+ * Gemini `generateContent` returns JPEG ONLY (measured 2026-10-08):
+ * the `responseFormat.image.mimeType` enum accepts `IMAGE_JPEG` and rejects any
+ * PNG name, and `imageConfig` has no format field at all. PNG cannot be
+ * requested — so insertion must know a second format.
  *
- * Тут лише те, що потрібно place.js: розмір (з SOF) і роздільність (JFIF APP0,
- * аналог pHYs). Піксели не декодуємо — Photoshop робить це сам у placeEvent.
+ * Only what place.js needs is here: size (from SOF) and resolution (JFIF APP0,
+ * the analogue of pHYs). Pixels are not decoded — Photoshop does that itself in placeEvent.
  */
 
 const isJpeg = b => b.length > 3 && b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF;
 const isPng = b => b.length > 8 && PNG_SIG.every((v, i) => b[i] === v);
 
-/** Розміри з SOFn. Таблиці Хаффмана (C4), JPG (C8) і арифметики (CC) — не SOF. */
+/** Size from SOFn. Huffman tables (C4), JPG (C8) and arithmetic (CC) are not SOF. */
 function readJpegSize(jpg) {
     let off = 2;
     while (off + 4 <= jpg.length) {
         if (jpg[off] !== 0xFF) break;
         const marker = jpg[off + 1];
-        if (marker === 0xFF) { off++; continue; }            // заповнювач між сегментами
-        if (marker === 0xD9 || marker === 0xDA) break;       // EOI / початок даних
+        if (marker === 0xFF) { off++; continue; }            // padding between segments
+        if (marker === 0xD9 || marker === 0xDA) break;       // EOI / start of scan
         const len = (jpg[off + 2] << 8) | jpg[off + 3];
         if (marker >= 0xC0 && marker <= 0xCF && marker !== 0xC4 && marker !== 0xC8 && marker !== 0xCC) {
             if (off + 9 > jpg.length) break;
@@ -456,9 +457,9 @@ function readJpegSize(jpg) {
 }
 
 /**
- * Вписує роздільність у JFIF APP0 — навіщо, див. setPngResolution.
- * Gemini кладе APP0 одразу після SOI (300 dpi); якщо його немає — вставляємо.
- * Щільність у JFIF 16-бітна й ціла: дробові ppi округлюємо.
+ * Writes resolution into JFIF APP0 — why, see setPngResolution.
+ * Gemini puts APP0 immediately after SOI (300 dpi); if it is missing, we insert it.
+ * JFIF density is 16-bit and integer: fractional ppi is rounded.
  */
 function setJpegResolution(jpg, ppi) {
     const dpi = Math.min(65535, Math.max(1, Math.round(ppi)));
@@ -467,7 +468,7 @@ function setJpegResolution(jpg, ppi) {
         ((jpg[4] << 8) | jpg[5]) >= 16;
     if (isJfif) {
         const out = jpg.slice();
-        out[13] = 1;                                         // одиниці: dots per inch
+        out[13] = 1;                                         // units: dots per inch
         out[14] = dpi >> 8; out[15] = dpi & 0xFF;
         out[16] = dpi >> 8; out[17] = dpi & 0xFF;
         return out;
@@ -478,8 +479,9 @@ function setJpegResolution(jpg, ppi) {
 }
 
 /**
- * Результат провайдера → байти для placeEvent. Формат визначаємо за байтами, а не
- * за mimeType відповіді: він же потім лежить у кеші й історії без жодних метаданих.
+ * Provider result → bytes for placeEvent. The format is detected from the bytes,
+ * not from the response mimeType: the same bytes later sit in the cache and history
+ * with no metadata.
  */
 function prepareForPlace(bytes, ppi) {
     if (isPng(bytes)) {
@@ -493,7 +495,7 @@ function prepareForPlace(bytes, ppi) {
     throw new Error(pngI18n.t('png.invalid'));
 }
 
-/** MIME за першими байтами base64: `/9j/` — це FF D8 FF, тобто JPEG. */
+/** MIME from the first base64 bytes: `/9j/` is FF D8 FF, that is JPEG. */
 const mimeOfB64 = b64 => (String(b64).startsWith('/9j/') ? 'image/jpeg' : 'image/png');
 
 module.exports = {

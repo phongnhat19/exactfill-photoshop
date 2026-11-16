@@ -1,49 +1,49 @@
 /* ============================================================================
- *  providers/curl-transport.js — мережа ПОЗА процесом Photoshop.
+ *  providers/curl-transport.js — the network OUTSIDE the Photoshop process.
  *
- *  Задача: якщо фаєрвол блокує вихідні з'єднання Photoshop (правило по процесу),
- *  плагін усе одно працює. Запит робить окремий бінарник `curl`, який є штатно
- *  і в macOS, і у Windows 10+ — жодних встановлень і жодного sidecar.
+ *  The job: if a firewall blocks Photoshop's outbound connections (a per-process
+ *  rule), the plugin still works. The request is made by a separate `curl`
+ *  binary, which ships with both macOS and Windows 10+ — no install and no sidecar.
  *
- *  Ланцюг (кожна ланка виміряна в PS 27.5.0, деталі — у пам'яті проєкту):
+ *  The chain (every link measured in PS 27.5.0):
  *    UXP → session token → batchPlay 'AdobeScriptAutomation Scripts'
- *        → згенерований ES3-скрипт → app.system("curl … &")
- *        → пулінг файлів відповіді → Response-подібний об'єкт
+ *        → a generated ES3 script → app.system("curl … &")
+ *        → polling the response files → a Response-like object
  *
- *  ⚠️ ЧОМУ СКРИПТ ГЕНЕРУЄТЬСЯ, А НЕ ЛЕЖИТЬ ГОТОВИЙ: подія
- *  'AdobeScriptAutomation Scripts' не має каналу для аргументів. Єдиний спосіб
- *  передати команду — вбудувати її в текст скрипта. Ключ API у цей текст НЕ
- *  потрапляє: він живе лише у файлі `--config`, тому й у `ps` його не видно.
+ *  WHY THE SCRIPT IS GENERATED, NOT CHECKED IN: the
+ *  'AdobeScriptAutomation Scripts' event has no channel for arguments. The only
+ *  way to pass the command is to embed it in the script text. The API key does
+ *  NOT enter that text: it lives only in the `--config` file, so `ps` cannot see it.
  *
- *  ⚠️ ЧОМУ nativePath: щоб зібрати команду для shell, потрібні справжні шляхи.
- *  Файли створює сам UXP у власній тимчасовій папці, тому читання й прибирання
- *  йдуть через ті ж Entry (`entry.delete()`), а не через здогадки про шляхи.
- *  Вставка результату в документ як раніше — через session token, не через шлях.
+ *  WHY nativePath: building a shell command needs real paths. UXP itself creates
+ *  the files in its own temporary folder, so reading and cleanup go through those
+ *  same Entry objects (`entry.delete()`), not through guessed paths. Inserting
+ *  the result into the document stays as before — via a session token, not a path.
  * ========================================================================== */
 
 const curlI18n = require('../i18n.js');
 
-/** Стан транспорту: 'auto' | 'direct' | 'curl'. Рішення — у active(). */
+/** Transport state: 'auto' | 'direct' | 'curl'. The decision is in active(). */
 let mode = 'auto';
-/** Кеш результату перевірки можливостей: null | { ok, reason } */
+/** Cache of the capability check: null | { ok, reason } */
 let capability = null;
-/** Синхронна копія capability.ok — active() не може бути async. */
+/** Synchronous copy of capability.ok — active() cannot be async. */
 let capabilityOk = false;
-/** Чи впав прямий fetch через мережу — підстава для 'auto' піти в curl. */
+/** Whether direct fetch failed on the network — the reason 'auto' may switch to curl. */
 let directFailed = false;
-/** Результат preflight: чи вирішено маршрут і який саме. */
+/** Preflight result: whether the route is decided, and which one. */
 let routeDecided = false;
 let routeUseCurl = false;
 let seq = 0;
 
 /**
- * Скільки чекати першого контакту, перш ніж визнати прямий шлях непрохідним.
+ * How long to wait for first contact before calling the direct path impassable.
  *
- * ⚠️ ЧОМУ ЦЕ ОКРЕМО ВІД timeoutMs ЗАПИТУ: заблокований фаєрволом потік не
- * відмовляється, а ВИСИТЬ (виміряно: 20–30 с у стані «правила ще нема»). Якщо
- * чекати таймаут генерації, користувач дивиться на «Generating…» до 300 с і
- * лише потім отримує перемикання. Preflight на дешевий keyless-запит вирішує
- * маршрут за секунди й лише раз на сесію.
+ * WHY THIS IS SEPARATE FROM THE REQUEST timeoutMs: a stream blocked by a firewall
+ * does not refuse, it HANGS (measured: 20–30 s in the "no rule yet" state). If we
+ * waited out the generation timeout, the user would stare at "Generating…" for up
+ * to 300 s and only then get the switch. A preflight on a cheap keyless request
+ * decides the route in seconds, and only once per session.
  */
 const PREFLIGHT_MS = 6000;
 
@@ -53,29 +53,29 @@ function platform() {
 
 const isWindows = () => platform() === 'win32';
 
-/* ── Чисті функції (тестуються під Node, без Photoshop) ────────────────────── */
+/* ── Pure functions (tested under Node, without Photoshop) ──────────────────── */
 
 /**
- * ASCII-перевірка шляху.
+ * ASCII check for a path.
  *
- * ⚠️ Windows cmd працює в OEM-кодуванні (на нашій тестовій машині `chcp` = 866).
- * Шлях із кирилицею — а профіль користувача цілком може бути «C:\Users\Оксана» —
- * дійде до curl зіпсованим. Тому непридатний шлях краще виявити заздалегідь і
- * лишити прямий fetch, ніж дати незрозумілу помилку.
+ * Windows cmd runs in an OEM code page (on our test machine `chcp` = 866).
+ * A path with non-Latin characters — a user profile may well be a non-ASCII
+ * "C:\Users\<name>" — reaches curl corrupted. Better to detect an unfit path
+ * ahead of time and keep the direct fetch than to produce an opaque error.
  */
 function isAsciiPath(p) {
     return typeof p === 'string' && p.length > 0 && !/[^\x20-\x7E]/.test(p);
 }
 
-/** Значення для файлу `--config`: подвійні лапки, escape зворотних слешів. */
+/** A value for the `--config` file: double quotes, backslashes escaped. */
 function quoteConfigValue(value) {
     return '"' + String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 }
 
 /**
- * Файл `--config` для curl. Тут живуть URL, метод, заголовки (разом із
- * Authorization) і шляхи — тобто все чутливе лишається у файлі з правами
- * користувача, а не в аргументах процесу.
+ * The `--config` file for curl. The URL, method, headers (including
+ * Authorization) and paths live here — everything sensitive stays in a file
+ * with the user's permissions, not in the process arguments.
  */
 function buildCurlConfig({ url, method = 'GET', headers = {}, bodyFile, outFile,
                            headerFile, timeoutSec = 300, stream = false }) {
@@ -87,8 +87,8 @@ function buildCurlConfig({ url, method = 'GET', headers = {}, bodyFile, outFile,
         'max-time = ' + String(Math.max(1, Math.round(timeoutSec))),
         'output = ' + quoteConfigValue(outFile),
         'dump-header = ' + quoteConfigValue(headerFile),
-        // статус і код виходу забираємо з stdout, а не з коду app.system:
-        // на Windows після `start /b` коду виходу немає взагалі
+        // take the status and exit code from stdout, not from app.system's code:
+        // on Windows after `start /b` there is no exit code at all
         'write-out = ' + quoteConfigValue('%{http_code} %{exitcode}'),
     ];
     if (stream) lines.push('no-buffer');
@@ -100,7 +100,7 @@ function buildCurlConfig({ url, method = 'GET', headers = {}, bodyFile, outFile,
     return lines.join('\n') + '\n';
 }
 
-/** Лапки для shell цільової платформи. */
+/** Quotes for the target platform's shell. */
 function shellQuote(plat, value) {
     const s = String(value);
     if (plat === 'win32') return '"' + s.replace(/"/g, '""') + '"';
@@ -108,27 +108,27 @@ function shellQuote(plat, value) {
 }
 
 /**
- * Текст одноразового ES3-скрипта.
+ * Text of a one-shot ES3 script.
  *
- * ⚠️ ExtendScript тут — ES3: ні let, ні стрілок, ні JSON. І лише ASCII: кодування
- * `do javascript` / події не гарантоване, будь-яка кирилиця дає мойбейк.
- * Шлях до curl обчислюється всередині скрипта ($.getenv), щоб у runtime-коді
- * плагіна не з'явилось жодного абсолютного системного шляху.
+ * ExtendScript here is ES3: no let, no arrows, no JSON. And ASCII only: the
+ * encoding of `do javascript` / the event is not guaranteed, and any non-ASCII
+ * becomes mojibake. The path to curl is computed inside the script ($.getenv),
+ * so the plugin's runtime code contains no absolute system path.
  */
 function buildJobJsx({ configFile, codeFile }) {
-    /* ⚠️ ЛАПКУВАННЯ РОБИТЬ shellQuote — та сама функція, яку бачать тести.
-       Раніше тут жила ДРУГА реалізація: ES3-функція q(), яка лапки всередині
-       шляху не екранувала взагалі. Виходило найгірше поєднання — тести зеленіли
-       на buildCommand, якої в бою не існувало, а в бою працювала неперевірена
-       q(). Шлях з апострофом розривав команду, curl не стартував зовсім, і
-       користувач бачив не помилку, а мовчазний таймаут пулінгу. */
+    /* QUOTING IS DONE BY shellQuote — the same function the tests see.
+       There used to be a SECOND implementation here: an ES3 function q() that
+       did not escape quotes inside a path at all. The worst combination: tests
+       went green on buildCommand, which did not exist in production, while
+       production ran the untested q(). A path with an apostrophe broke the
+       command, curl never started, and the user saw not an error but a silent
+       polling timeout. */
     const lit = (plat, v) => JSON.stringify(shellQuote(plat, v));
     const jsx = [
         '// generated by ExactFill; disposable',
         'var win = $.os.indexOf("Windows") >= 0;',
-        // шлях до curl обчислюється на місці: у коді плагіна не має бути
-        // жодного абсолютного системного шляху (лапки прямі — SystemRoot
-        // лапок містити не може)
+        // the path to curl is computed in place: the plugin code must contain
+        // no absolute system path (straight quotes — SystemRoot cannot contain quotes)
         'var curl = win ? ("\\"" + $.getenv("SystemRoot") + "\\\\System32\\\\curl.exe\\"") : ' + lit('darwin', '/usr/bin/curl') + ';',
         'var cfg  = win ? ' + lit('win32', configFile) + ' : ' + lit('darwin', configFile) + ';',
         'var code = win ? ' + lit('win32', codeFile) + ' : ' + lit('darwin', codeFile) + ';',
@@ -142,7 +142,7 @@ function buildJobJsx({ configFile, codeFile }) {
     return jsx;
 }
 
-/** `-w` віддає «<http_code> <exitcode>»; помилка curl може дописати текст. */
+/** `-w` returns "<http_code> <exitcode>"; a curl error may append text. */
 function parseWriteOut(text) {
     const raw = String(text == null ? '' : text).trim();
     if (!raw) return null;
@@ -152,7 +152,7 @@ function parseWriteOut(text) {
     return { status: Number(m[1]), curlExit: Number(m[2]), note: note.slice(0, 300) };
 }
 
-/** Заголовки з `dump-header` → мінімальний headers.get(). */
+/** Headers from `dump-header` → a minimal headers.get(). */
 function parseHeaderDump(text) {
     const map = new Map();
     for (const line of String(text || '').replace(/\r\n/g, '\n').split('\n')) {
@@ -163,7 +163,7 @@ function parseHeaderDump(text) {
     return { get: name => (map.has(String(name).toLowerCase()) ? map.get(String(name).toLowerCase()) : null) };
 }
 
-/** Людське пояснення кодів виходу curl, які трапляються насправді. */
+/** A human explanation of the curl exit codes that actually occur. */
 function describeCurlExit(code) {
     if (code === 6) return curlI18n.t('transport.curlDns');
     if (code === 7) return curlI18n.t('transport.curlRefused');
@@ -172,11 +172,11 @@ function describeCurlExit(code) {
     return curlI18n.t('transport.curlFailed', { code: String(code) });
 }
 
-/* ── Рантайм ───────────────────────────────────────────────────────────────── */
+/* ── Runtime ───────────────────────────────────────────────────────────────── */
 
 function setMode(next) {
     mode = ['auto', 'direct', 'curl'].includes(next) ? next : 'auto';
-    routeDecided = false;               // ручний вибір скасовує попередній вердикт
+    routeDecided = false;               // a manual choice cancels the previous verdict
     routeUseCurl = false;
     return mode;
 }
@@ -186,9 +186,9 @@ const resetDirectFailure = () => { directFailed = false; };
 const isRouteDecided = () => routeDecided;
 
 /**
- * Preflight: один дешевий keyless-запит, щоб дізнатися, чи взагалі виходить
- * прямий шлях. Будь-яка HTTP-відповідь (навіть 401/403/404) означає «мережа
- * працює» — нас цікавить факт відповіді, не її код.
+ * Preflight: one cheap keyless request to learn whether the direct path works
+ * at all. Any HTTP response (even 401/403/404) means "the network works" — we
+ * care that a response arrived, not what its code was.
  */
 async function decideRoute(origin, { fetchImpl, timeoutMs = PREFLIGHT_MS } = {}) {
     if (routeDecided) return routeUseCurl;
@@ -200,13 +200,13 @@ async function decideRoute(origin, { fetchImpl, timeoutMs = PREFLIGHT_MS } = {})
     const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
     try {
         await doFetch(origin + '/', { method: 'GET', signal: ctrl ? ctrl.signal : undefined });
-        console.log('[curl] preflight: прямий шлях працює');
+        console.log('[curl] preflight: direct path works');
     } catch (e) {
         const cap = await probe();
         routeUseCurl = cap.ok;
         console.log(routeUseCurl
-            ? `[curl] preflight: прямий шлях не відповів (${e && e.message}) — беру curl`
-            : `[curl] preflight: прямий шлях не відповів, curl теж недоступний (${cap.reason})`);
+            ? `[curl] preflight: direct path did not answer (${e && e.message}) — using curl`
+            : `[curl] preflight: direct path did not answer, curl is also unavailable (${cap.reason})`);
     } finally {
         if (timer) clearTimeout(timer);
     }
@@ -214,11 +214,11 @@ async function decideRoute(origin, { fetchImpl, timeoutMs = PREFLIGHT_MS } = {})
 }
 
 /**
- * Чи маємо зараз іти через curl.
+ * Whether we should go through curl right now.
  *
- * ⚠️ В 'auto' недостатньо факту відмови прямого шляху: якщо перевірка можливостей
- * не пройшла (немає містка, шлях із кирилицею), маршрут непридатний, і вертати тут
- * true означало б гнати кожен наступний запит у транспорт, який не працює.
+ * In 'auto' a direct-path failure is not enough: if the capability check failed
+ * (no bridge, a non-ASCII path), the route is unfit, and returning true here
+ * would send every later request into a transport that does not work.
  */
 function active() {
     if (mode === 'direct') return false;
@@ -231,7 +231,7 @@ async function tempFolder() {
     return lfs.getTemporaryFolder();
 }
 
-/** Створює (перезаписує) файл у тимчасовій папці плагіна. */
+/** Creates (overwrites) a file in the plugin's temporary folder. */
 async function makeFile(folder, name) {
     const { storage } = require('uxp');
     return folder.createFile(name, { overwrite: true });
@@ -255,23 +255,23 @@ async function readTextSafe(entry) {
 async function removeQuietly(entries) {
     for (const entry of entries) {
         if (!entry) continue;
-        try { await entry.delete(); } catch (e) { /* лишиться в temp, не критично */ }
+        try { await entry.delete(); } catch (e) { /* stays in temp, not critical */ }
     }
 }
 
 /**
- * Одноразова перевірка можливостей: тимчасова папка з ASCII-шляхом і робочий
- * місток до ExtendScript. Результат кешується — це не безкоштовно.
+ * A one-shot capability check: a temp folder with an ASCII path and a working
+ * bridge to ExtendScript. The result is cached — this is not free.
  */
 async function probe() {
     if (capability) return capability;
     try {
         const folder = await tempFolder();
         if (!isAsciiPath(folder.nativePath)) {
-            // шлях у лог свідомо: без нього неможливо зрозуміти, чому транспорт
-            // відмовився на чужій машині (найімовірніша причина — імʼя користувача
-            // не латиницею, а профіль Windows складається саме з нього)
-            console.log(`[curl] робоча папка не ASCII, лишаю прямий шлях: ${folder.nativePath}`);
+            // the path is logged on purpose: without it you cannot tell why the
+            // transport refused on someone else's machine (the likeliest cause is a
+            // non-Latin user name, and a Windows profile is made of exactly that)
+            console.log(`[curl] work folder is not ASCII, keeping the direct path: ${folder.nativePath}`);
             capability = { ok: false, reason: curlI18n.t('transport.nonAsciiPath') };
             capabilityOk = false;
             return capability;
@@ -291,12 +291,12 @@ async function probe() {
 }
 
 /**
- * Виконує ExtendScript-файл і повертає його результат.
+ * Runs an ExtendScript file and returns its result.
  *
- * ⚠️ Нативний шлях подія НЕ приймає: `{_path:'/abs'}` дає «invalid file token
- * used». Працює лише session token, і лише всередині executeAsModal.
- * Значення, яке віддав скрипт, приходить у `javaScriptMessage` — це і є
- * зворотний канал, тому дрібні відповіді через файли гонити не треба.
+ * The event does NOT accept a native path: `{_path:'/abs'}` yields "invalid file
+ * token used". Only a session token works, and only inside executeAsModal.
+ * The value the script returned arrives in `javaScriptMessage` — that is the
+ * return channel, so small answers do not need to be shuttled through files.
  */
 async function runJsx(entry) {
     const { action, core } = require('photoshop');
@@ -317,9 +317,9 @@ async function runJsx(entry) {
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 /**
- * Response-подібний об'єкт над файлами curl: рівно те, що використовує http.js
- * (`ok`, `status`, `headers.get`, `text()`, `body.getReader()`), і нічого більше.
- * Завдяки цьому провайдери й розбір SSE лишаються без змін.
+ * A Response-like object over curl's files: exactly what http.js uses
+ * (`ok`, `status`, `headers.get`, `text()`, `body.getReader()`), and nothing more.
+ * Because of that, providers and SSE parsing stay unchanged.
  */
 async function curlFetch(url, { method = 'GET', headers = {}, body,
                                 timeoutMs = 300000, signal, stream = false } = {}) {
@@ -330,11 +330,12 @@ async function curlFetch(url, { method = 'GET', headers = {}, body,
     const id = `exactfill-${Date.now().toString(36)}-${++seq}`;
     const files = {};
     const created = [];
-    /* ⚠️ ЦЕЙ try — НЕ ГІГІЄНА ДИСКУ. У .cfg лежить заголовок Authorization
-       разом із ключем API: його свідомо винесли у файл, щоб він не світився в
-       `ps`. Отже прибирання файлів — єдине, що прибирає ключ. Раніше будь-який
-       throw після створення файлів (найімовірніший — runJsx, для якого в i18n
-       є окремий transport.bridgeRefused) лишав ключ у temp назавжди. */
+    /* THIS try IS NOT DISK HYGIENE. The .cfg holds the Authorization header
+       together with the API key: it was deliberately moved into a file so it
+       would not show up in `ps`. So cleaning up the files is the only thing that
+       removes the key. Any throw after the files were created (the likeliest is
+       runJsx, which has its own transport.bridgeRefused in i18n) used to leave
+       the key in temp forever. */
     try {
     for (const [key, suffix] of [['cfg', '.cfg'], ['out', '.out'], ['hdr', '.hdr'],
                                  ['code', '.code'], ['jsx', '.jsx']]) {
@@ -372,7 +373,7 @@ async function curlFetch(url, { method = 'GET', headers = {}, body,
     const spawned = await runJsx(files.jsx);
     console.log(`[curl] ${method} ${new URL(url).host} — ${spawned}`);
 
-    /** Пулінг: чекаємо, поки curl допише файл статусу. */
+    /** Polling: wait until curl finishes writing the status file. */
     async function waitForCompletion(onPartial) {
         const started = Date.now();
         let seen = 0;
@@ -399,16 +400,16 @@ async function curlFetch(url, { method = 'GET', headers = {}, body,
 }
 
 /**
- * Обгортка з інтерфейсом Response для неструмового запиту.
- * Помилки лишаються тими самими типами, що й у прямому шляху: розбір тіла,
- * retry-after і тексти повідомлень робить http.js.
+ * A wrapper with the Response interface for a non-streaming request.
+ * Errors stay the same types as on the direct path: body parsing, retry-after
+ * and message text are done by http.js.
  */
 async function fetchLike(url, init = {}) {
     const run = await curlFetch(url, init);
     const started = Date.now();
     try {
         const code = await run.waitForCompletion(null);
-        console.log(`[curl] ← ${code.status} (curl exit ${code.curlExit}) за ${Date.now() - started} мс`);
+        console.log(`[curl] ← ${code.status} (curl exit ${code.curlExit}) in ${Date.now() - started} ms`);
         if (code.curlExit !== 0 || code.status === 0) {
             const detail = describeCurlExit(code.curlExit);
             throw new Error(code.note ? `${detail} (${code.note})` : detail);
@@ -428,8 +429,8 @@ async function fetchLike(url, init = {}) {
 }
 
 /**
- * Струмовий варіант: reader над зростаючим файлом. Проміжні кадри реальні —
- * файл curl росте під час запиту (виміряно: 50 КБ/с рівно посекундно).
+ * Streaming variant: a reader over a growing file. Intermediate frames are real —
+ * the curl file grows during the request (measured: 50 KB/s, steadily, per second).
  */
 async function fetchLikeStream(url, init = {}) {
     const run = await curlFetch(url, { ...init, stream: true });
@@ -438,12 +439,11 @@ async function fetchLikeStream(url, init = {}) {
     let failure = null;
     let finalText = '';
 
-    /* ⚠️ Раніше прибирання жило ЛИШЕ всередині read() під `if (done)`. Це
-       працює, поки споживач дочитує до кінця, — але requestStream у http.js
-       кличе onEvent прямо в циклі читання. Варто обробнику preview кинути
-       виняток, і read() більше не покличуть: .cfg (ключ API) та .body
-       (зображення користувача) лишаються в temp. Тепер прибирання висить на
-       завершенні pump і виконується рівно один раз. */
+    /* Cleanup used to live ONLY inside read() under `if (done)`. That works
+       while the consumer reads to the end — but requestStream in http.js calls
+       onEvent right in the read loop. If the preview handler throws, read() is
+       never called again: .cfg (the API key) and .body (the user's image) stay
+       in temp. Cleanup now hangs off the end of pump and runs exactly once. */
     let cleaned = false;
     const cleanup = async () => {
         if (cleaned) return;
@@ -463,16 +463,16 @@ async function fetchLikeStream(url, init = {}) {
         })
         .catch(e => { failure = e; return null; })
         .then(async code => {
-            // останнє читання ДО видалення: після delete файл не прочитати, а
-            // text() — запасний шлях http.js, коли reader недоступний
+            // the last read BEFORE deletion: after delete the file cannot be read,
+            // and text() is http.js's fallback when a reader is unavailable
             finalText = await run.readTextSafe(run.files.out);
             done = true;
             await cleanup();
             return code;
         });
 
-    // статус відомий лише після завершення curl, тому для SSE віддаємо 200
-    // оптимістично, а справжню помилку кидаємо в reader — саме там її ловить http.js
+    // the status is known only after curl finishes, so for SSE we return 200
+    // optimistically, and throw the real error in the reader — that is where http.js catches it
     return {
         ok: true,
         status: 200,
@@ -499,10 +499,10 @@ async function fetchLikeStream(url, init = {}) {
 }
 
 module.exports = {
-    // чисте, для тестів
+    // pure, for tests
     isAsciiPath, quoteConfigValue, buildCurlConfig, shellQuote,
     buildJobJsx, parseWriteOut, parseHeaderDump, describeCurlExit,
-    // стан і рантайм
+    // state and runtime
     setMode, getMode, active, noteDirectFailure, resetDirectFailure,
     isRouteDecided, decideRoute, PREFLIGHT_MS,
     probe, fetchLike, fetchLikeStream,

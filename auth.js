@@ -1,11 +1,12 @@
 /* ============================================================================
- *  auth.js — ключі API, по одному на провайдера.
+ *  auth.js — API keys, one per provider.
  *
- *  Старий auth.js знав рівно один ключ ('openAiApiKey') і був жорстко зшитий
- *  з UI. Оскільки провайдерів тепер два, ключ став параметром.
+ *  The old auth.js knew exactly one key ('openAiApiKey') and was hard-wired
+ *  to the UI. Now that there are two providers, the key is a parameter.
  *
- *  secureStorage ізольований per plugin id, тому ключі зі старих плагінів сюди
- *  не переїдуть — їх треба ввести заново. Це не помилка, це властивість UXP.
+ *  secureStorage is isolated per plugin id, so keys from the old plugins do
+ *  not move here — they have to be entered again. That is not a bug; it is
+ *  how UXP works.
  * ========================================================================== */
 
 const { shell, storage } = require('uxp');
@@ -14,8 +15,8 @@ const secureStore = storage.secureStorage;
 const authI18n = require('./i18n.js');
 
 /**
- * secureStorage віддає ключ як Uint8Array, а не рядок — звідси
- * String.fromCharCode. Робимо порціями: apply на великому масиві переповнює стек.
+ * secureStorage returns the key as a Uint8Array, not a string — hence
+ * String.fromCharCode. Do it in chunks: apply on a large array overflows the stack.
  */
 async function getKey(keyName) {
     try {
@@ -29,7 +30,7 @@ async function getKey(keyName) {
         }
         return s || null;
     } catch (e) {
-        // «not found» у secureStorage кидається як виняток, а не повертає null
+        // "not found" in secureStorage is thrown, not returned as null
         return null;
     }
 }
@@ -44,15 +45,15 @@ async function hasKey(keyName) {
 
 /* ── UI ────────────────────────────────────────────────────────────────────── */
 
-/* Адреса сторінки ключа живе В ПРОВАЙДЕРІ (providers/*.js keyPage) — щоб при
-   додаванні третього провайдера не треба було правити ще й цей файл. Тут лише
-   резерв на випадок, коли поле не заповнене. */
+/* The key-page URL lives ON THE PROVIDER (providers/*.js keyPage) — so adding
+   a third provider does not require editing this file too. This is only a
+   fallback for when that field is empty. */
 const KEY_LINKS = {
     openAiApiKey: 'https://platform.openai.com/api-keys',
     googleApiKey: 'https://aistudio.google.com/apikey',
 };
 
-/** Яким ключем цікавиться панель зараз — залежить від обраного провайдера. */
+/** Which key the panel cares about right now — depends on the selected provider. */
 function activeKeyName() {
     const providers = require('./providers/index.js');
     const id = localStorage.getItem(authKeys.provider) || providers.first().id;
@@ -90,15 +91,15 @@ async function submitAuth() {
         await setKey(activeKeyName(), value);
         if (input) input.value = '';
         await refreshAuthUI();
-        /* ⚠️ Перелік моделей залежить від КЛЮЧА: доступність питається в
-           /v1/models. Без цієї події щойно введений ключ починав фільтрувати
-           пікер лише після перевідкриття панелі — тобто користувач бачив
-           моделі, яких у нього нема, і отримував 404 замість пояснення. */
+        /* The model list depends on the KEY: availability is asked from
+           /v1/models. Without this event a freshly entered key started filtering
+           the picker only after the panel was reopened — so the user saw
+           models they do not have and got a 404 instead of an explanation. */
         if (typeof document !== 'undefined' && typeof Event !== 'undefined') {
             document.dispatchEvent(new Event('exactfill:keychange'));
         }
     } catch (e) {
-        console.error('[auth] ключ не збережено:', e && e.message);
+        console.error('[auth] key was not saved:', e && e.message);
         const status = document.getElementById('auth-status');
         if (status) status.textContent = authI18n.t('auth.saveError', {
             error: e && e.message ? e.message : e,
@@ -114,7 +115,7 @@ async function toggleAuthEdit() {
 
     const editing = !auth.classList.contains('hidden');
     if (editing) {
-        await refreshAuthUI();                 // «Залишити» — просто відновлюємо стан
+        await refreshAuthUI();                 // "Keep" — just restore the previous state
     } else {
         main.classList.add('hidden');
         auth.classList.remove('hidden');
@@ -142,7 +143,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 await shell.openExternal(url, authI18n.t('auth.openConsent'));
             } catch (err) {
-                console.error('[auth] посилання не відкрилось:', err && err.message);
+                console.error('[auth] link did not open:', err && err.message);
                 const status = document.getElementById('auth-status');
                 if (status) status.textContent = authI18n.t('auth.openError', {
                     error: err && err.message ? err.message : err,
@@ -154,6 +155,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
 document.addEventListener('exactfill:localechange', () => refreshAuthUI());
 
-// main.js викликає refreshAuthUI при зміні провайдера — панель мусить
-// перемкнутися на потрібний ключ
+// main.js calls refreshAuthUI when the provider changes — the panel must
+// switch to the matching key
 window.aiAuth = { getKey, setKey, hasKey, refreshAuthUI, activeKeyName };

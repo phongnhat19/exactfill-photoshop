@@ -1,32 +1,31 @@
 /* ============================================================================
- *  ledger.js — журнал витрат на диску.
+ *  ledger.js — cost ledger on disk.
  *
- *  ⚠️ ЧОМУ ОКРЕМИЙ ФАЙЛ, А НЕ ЧАСТИНА usage.js: usage.js СВІДОМО чистий —
- *  «без Photoshop/DOM/localStorage», і саме тому тарифну арифметику можна
- *  ганяти в node. Перенести туди localStorage означало б зламати це рішення
- *  заради економії одного файлу. Тому зберігання живе тут, а формат і
- *  арифметика лишаються там.
+ *  Why a separate file, not part of usage.js: usage.js is deliberately pure —
+ *  "no Photoshop/DOM/localStorage" — which is why the pricing arithmetic can
+ *  run in node. Moving localStorage into it would break that decision just to
+ *  save one file. Storage lives here; the format and arithmetic stay there.
  *
- *  Виділено з main.js: панель не має знати, під яким ключем і в якій формі
- *  лежить журнал.
+ *  Split out of main.js: the panel should not know which key or shape the
+ *  ledger uses.
  * ========================================================================== */
 
 const ledgerKeys = require('./storage-keys.js').LS;
 const usageTracker = require('./usage.js');
 
 /**
- * Читає журнал. Пошкоджений журнал НЕ валить панель: гірше за втрачену
- * статистику лише панель, яка через неї не відкривається.
+ * Reads the ledger. A damaged ledger must NOT take down the panel: worse than
+ * lost statistics is a panel that will not open because of them.
  */
 function load() {
     try {
         const parsed = JSON.parse(localStorage.getItem(ledgerKeys.usage));
-        // Об'єктова форма лишає простір для майбутньої міграції, але читаємо й
-        // ранню масивну форму, якщо вона встигла потрапити в локальну збірку.
+        // The object form leaves room for a future migration, but we also read
+        // the early array form if it already landed in a local build.
         const entries = Array.isArray(parsed) ? parsed : parsed?.entries;
         return usageTracker.prune(entries || []);
     } catch (e) {
-        console.warn('[usage] журнал пошкоджений — починаю порожній:', e.message);
+        console.warn('[usage] ledger is damaged — starting empty:', e.message);
         return [];
     }
 }
@@ -37,7 +36,7 @@ function save(entries) {
     return clean;
 }
 
-/** Додає запис і повертає оновлений журнал — рендер робить той, хто викликав. */
+/** Adds an entry and returns the updated ledger — the caller does the render. */
 function record(meta, usage) {
     const entries = load();
     entries.unshift(usageTracker.createEntry(meta, usage));

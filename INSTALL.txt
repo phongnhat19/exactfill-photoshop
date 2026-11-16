@@ -77,78 +77,82 @@ The final folder must contain manifest.json directly inside it.
 
 =======================================================================
 
-EXACTFILL 1.4.0 — ВСТАНОВЛЕННЯ
+EXACTFILL 1.4.0 — INSTALLATION
 ================================
 
-ExactFill однаковий для Windows і macOS. Повністю розпакуйте ZIP, а потім
-скопіюйте цілу папку "ExactFill". Не копіюйте сам ZIP або лише окремі файли
-з папки.
+This section repeats the guide above. It used to be the Ukrainian copy and is
+now English.
+
+ExactFill is the same plugin on Windows and macOS. Extract the ZIP completely,
+then copy the entire "ExactFill" folder. Do not copy the ZIP itself or only
+individual files from the folder.
 
 WINDOWS
 -------
-1. Закрийте Photoshop.
-2. Скопіюйте цілу папку "ExactFill" до папки Plug-ins своєї версії Photoshop,
-   наприклад:
+1. Close Photoshop.
+2. Copy the entire "ExactFill" folder to the Plug-ins folder of your Photoshop,
+   for example:
 
    C:\Program Files\Adobe\Adobe Photoshop 2026\Plug-ins\ExactFill
 
-3. Підтвердьте запит адміністратора Windows, якщо він з'явиться.
-4. Запустіть Photoshop і відкрийте Plugins > ExactFill.
+3. Confirm the Windows administrator prompt if it appears.
+4. Start Photoshop and open Plugins > ExactFill.
 
-ДОСТУП ДО МЕРЕЖІ У WINDOWS
---------------------------
-ExactFill робить прямі HTTPS-запити з Photoshop/UXP. Якщо фаєрвол, проксі,
-захисна програма або політика вихідного трафіку обмежує Photoshop, дозвольте
-TCP-порт 443 до домену потрібного провайдера:
+NETWORK ACCESS ON WINDOWS
+-------------------------
+ExactFill makes direct HTTPS requests from Photoshop/UXP. If a firewall, proxy,
+security product, or outbound policy restricts Photoshop, allow TCP port 443
+to the domain of the provider you need:
 
    OpenAI:  api.openai.com
    Gemini:  generativelanguage.googleapis.com
 
-Дозвіл у manifest.json лише відкриває ExactFill доступ усередині UXP-пісочниці;
-він не може обійти Windows Firewall або сторонню захисну програму.
+The permission in manifest.json only grants ExactFill access inside the UXP
+sandbox; it cannot bypass Windows Firewall or a third-party security product.
 
-Важливо: у Microsoft Defender Firewall явне правило Block для Photoshop має
-пріоритет над суперечливим правилом Allow. Таке загальне блокування треба
-вимкнути або замінити політикою/фаєрволом, що підтримує потрібні винятки за
-доменами. Не вписуйте поточні IP-адреси провайдерів: вони можуть змінюватися.
+Important: in Microsoft Defender Firewall, an explicit Block rule for Photoshop
+takes priority over a conflicting Allow rule. Such a broad block must be
+disabled or replaced by a policy/firewall that supports the required domain
+exceptions. Do not hard-code the providers' current IP addresses: they can change.
 
-МАРШРУТ МЕРЕЖІ (коли фаєрвол блокує сам Photoshop)
---------------------------------------------------
-У розділі налаштувань "Маршрут мережі" є три варіанти:
+NETWORK ROUTE (when the firewall blocks Photoshop itself)
+---------------------------------------------------------
+The settings section "Network route" offers three options:
 
-   Авто            - спершу пробує Photoshop; якщо той не дістає провайдера за
-                     кілька секунд, запит виконує системна утиліта curl
-   Photoshop       - завжди прямий запит із Photoshop (попередня поведінка)
-   Системний curl  - завжди через системну утиліту curl
+   Auto           - try Photoshop first; if it cannot reach the provider within
+                    a few seconds, the system curl tool makes the request
+   Photoshop      - always request directly from Photoshop (previous behaviour)
+   System curl    - always request through the system curl tool
 
-Правило, що блокує Photoshop, не діє на curl: це окрема програма. curl входить
-до складу macOS і Windows 10 та новіших, тому нічого встановлювати не потрібно.
-Фаєрвол може один раз попросити дозвіл для curl — перший запит може на нього
-чекати. Перевірено на macOS із заблокованим Photoshop; маршрут у Windows ще
-тестується, і "Авто" повертається до прямого запиту, якщо curl недоступний.
+A rule that blocks Photoshop does not apply to curl: it is a separate program.
+curl ships with macOS and with Windows 10 and newer, so nothing has to be
+installed. The firewall may ask once to allow curl — the first request can
+wait on that prompt. Verified on macOS with Photoshop blocked; the Windows
+route is still being tested, and "Auto" falls back to the direct request if
+curl is unavailable.
 
 macOS
 -----
-1. Закрийте Photoshop.
-2. Скопіюйте цілу папку "ExactFill" до папки Plug-ins своєї версії Photoshop,
-   наприклад:
+1. Close Photoshop.
+2. Copy the entire "ExactFill" folder to the Plug-ins folder of your Photoshop,
+   for example:
 
    /Applications/Adobe Photoshop 2026/Plug-ins/ExactFill
 
-3. Введіть пароль адміністратора macOS, якщо Finder його попросить.
-4. Запустіть Photoshop і відкрийте Plugins > ExactFill.
+3. Enter the macOS administrator password if Finder asks for it.
+4. Start Photoshop and open Plugins > ExactFill.
 
-ДОСТУП ДО МЕРЕЖІ У macOS
-------------------------
-ExactFill робить прямі HTTPS-запити з Photoshop/UXP. Якщо мережевий монітор,
-проксі або сторонній фаєрвол обмежує Photoshop, дозвольте Photoshop/Adobe UXP
-зʼєднання через TCP-порт 443 із доменом потрібного провайдера:
+NETWORK ACCESS ON macOS
+-----------------------
+ExactFill makes direct HTTPS requests from Photoshop/UXP. If a network monitor,
+proxy, or third-party firewall restricts Photoshop, allow Photoshop/Adobe UXP
+to connect on TCP port 443 to the domain of the provider you need:
 
    OpenAI:  api.openai.com
    Gemini:  generativelanguage.googleapis.com
 
-Дозвіл у manifest.json лише відкриває ExactFill доступ усередині UXP-пісочниці;
-він не може обійти мережеві фільтри macOS або сторонній фаєрвол. Не вписуйте
-поточні IP-адреси провайдерів: вони можуть змінюватися.
+The permission in manifest.json only grants ExactFill access inside the UXP
+sandbox; it cannot bypass macOS network filters or a third-party firewall.
+Do not hard-code the providers' current IP addresses: they can change.
 
-У кінцевій папці manifest.json має лежати безпосередньо всередині ExactFill.
+In the final folder, manifest.json must sit directly inside ExactFill.

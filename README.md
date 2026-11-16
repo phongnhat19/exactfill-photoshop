@@ -1,6 +1,6 @@
 # ExactFill for Photoshop
 
-[Українська версія](README.uk.md)
+[English copy of the former Ukrainian README](README.uk.md)
 
 Exact AI edits, placed exactly where you selected them.
 
@@ -29,7 +29,7 @@ uses a real selection and shows the generated result returned as a precisely pla
 - Edge blending, context control, references, transparent output and lossless input.
 - OpenAI intermediate preview frames when the API and UXP runtime support streaming.
 - Persistent cost statistics, recent history, presets and a local result cache.
-- English and Ukrainian interface.
+- English interface. The `uk` locale code remains as a compatibility alias with the same English text.
 
 ## Install
 
@@ -59,7 +59,7 @@ must contain `manifest.json` directly inside it. If you are upgrading from the
 private **AI Image** build, replace its old `AiImagePS` folder instead of keeping
 both copies.
 
-The archive also contains the same instructions in English and Ukrainian.
+The archive also contains the same English instructions in `INSTALL.txt`, including the former Ukrainian section now translated in place.
 
 ## First use
 
@@ -105,7 +105,7 @@ broad Photoshop block must be disabled or replaced with a policy that supports
 the required domain exceptions. Do not use fixed IP addresses because provider
 addresses can change.
 
-The same bilingual guidance is included in `INSTALL.txt` inside every release.
+The same guidance is included in `INSTALL.txt` inside every release.
 
 ## Reporting problems
 
@@ -135,7 +135,7 @@ npm run build
 
 The release script writes `dist/ExactFill-<version>.zip`. Development measurements
 behind the placement algorithm are kept in [`verify/`](verify/README.md).
-Photoshop/UXP platform pitfalls and design decisions (in Ukrainian) are in
+Photoshop/UXP platform pitfalls and design decisions are in
 [`PLATFORM.md`](PLATFORM.md).
 
 ## License

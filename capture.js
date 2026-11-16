@@ -1,24 +1,24 @@
 /* ============================================================================
- *  capture.js — ЄДИНИЙ конвейєр захоплення пікселів. Більше ніде в плагіні
- *  imaging.getPixels не викликається.
+ *  capture.js — the ONLY pixel-capture pipeline. Nowhere else in the plugin
+ *  is imaging.getPixels called.
  *
- *  Головне правило: ДОКУМЕНТ КОРИСТУВАЧА НЕ ТОРКАЄМО НІКОЛИ.
- *  Старий плагін робив convertMode CMYK→RGB і 16→8 на живому документі, а в
- *  pastePhase ще й повертав назад — необоротно для всього макета: плашка
- *  0/0/0/100 ставала чотириколірним rich black, а сепарацію назад робив робочий
- *  профіль із Color Settings, а не профіль документа. На екрані майже не видно,
- *  вилізає на плівці.
+ *  The main rule: NEVER TOUCH THE USER'S DOCUMENT.
+ *  The old plugin ran convertMode CMYK→RGB and 16→8 on the live document, and
+ *  pastePhase converted it back — irreversible for the whole layout: a swatch
+ *  of 0/0/0/100 became four-color rich black, and the conversion back used the
+ *  working profile from Color Settings, not the document profile. It is almost
+ *  invisible on screen and shows up on film.
  *
- *  Два шляхи:
- *    RGB / Grayscale / Lab → imaging.getPixels із colorSpace + componentSize.
- *        getPixels документовано КОНВЕРТУЄ («If omitted, then the color space of
- *        the source document is used to convert colors»), а componentSize
- *        (-1|8|16|32) замінює convertMode depth:8 одним полем.
- *    CMYK та решта режимів → через ДУБЛІКАТ документа.
- *        Причина: getPixels/getData() у CMYK ВАЛИТЬ Photoshop (баг-репорт 26.9;
- *        Grayscale/RGB/Lab працюють, Bitmap/Indexed/Multichannel падають
- *        gracefully, CMYK — крашем). Документованого CMYK у imaging немає
- *        взагалі: createImageDataFromBuffer.colorSpace перелічує лише
+ *  Two paths:
+ *    RGB / Grayscale / Lab → imaging.getPixels with colorSpace + componentSize.
+ *        getPixels is documented to CONVERT ("If omitted, then the color space of
+ *        the source document is used to convert colors"), and componentSize
+ *        (-1|8|16|32) replaces convertMode depth:8 with one field.
+ *    CMYK and the other modes → through a document DUPLICATE.
+ *        Reason: getPixels/getData() in CMYK CRASHES Photoshop (bug report 26.9;
+ *        Grayscale/RGB/Lab work, Bitmap/Indexed/Multichannel fail
+ *        gracefully, CMYK crashes). There is no documented CMYK in imaging
+ *        at all: createImageDataFromBuffer.colorSpace lists only
  *        RGB/Grayscale/Lab.
  * ========================================================================== */
 
@@ -31,31 +31,32 @@ const { buildRectMaskPng, buildShapeMaskPng, encodePng } = require('./png.js');
 const { isolateLayerTree } = require('./layer-tree.js');
 const captureI18n = require('./i18n.js');
 
-/** Режими, які imaging API обслуговує безпечно. Решта — через дублікат. */
+/** Modes the imaging API handles safely. Everything else goes through a duplicate. */
 const SAFE_MODES = ['RGBColorMode', 'grayscaleMode', 'GrayscaleMode', 'labColorMode', 'LabColorMode'];
 
 const isSafeMode = mode => SAFE_MODES.some(m => String(mode).toLowerCase() === m.toLowerCase());
 
 /**
- * Поріг для входу без втрат.
+ * Threshold for lossless input.
  *
- * Навіщо поріг: JPEG q12 з'їдає дрібний шрифт і контури — модель сумлінно
- * відтворює артефакти, які ми самі й створили. PNG цього не робить. Але наш
- * deflate — fixed-Huffman із RLE лише на distance 1 і rowStride: на однорідній
- * масці це стиснення в сотні разів, на фотографії — майже літерали. Тобто
- * 2000×1500 RGB дасть ~9 МБ і кілька секунд роботи в JS.
+ * Why a threshold: JPEG q12 eats small type and edges — the model faithfully
+ * reproduces artifacts we created ourselves. PNG does not. But our deflate is
+ * fixed-Huffman with RLE only at distance 1 and rowStride: on a uniform mask
+ * that compresses hundreds of times, on a photograph it is almost literals. So
+ * 2000×1500 RGB produces ~9 MB and several seconds of work in JS.
  *
- * 2 МП — межа, де це ще швидко. Вище неї PNG пише сам Photoshop через дублікат
- * документа: формат від порогу НЕ залежить, залежить лише виконавець.
+ * 2 MP is the point where this is still fast. Above it Photoshop itself writes
+ * the PNG through a document duplicate: the format does NOT depend on the
+ * threshold, only the writer does.
  */
 const LOSSLESS_MAX_PX = 2_000_000;
 
 /**
- * Складає JPEG із ImageData.
- * encodeImageData вимагає colorSpace === 'RGB', тому 4 компоненти (RGBA) треба
- * звести до 3. Арифметики бітності тут НЕМА свідомо: ми просимо componentSize:8
- * у getPixels, тому старий баг (16→8 через >>8 при діапазоні [0..32768], що
- * давало вдвічі темніше зображення) неможливий за побудовою.
+ * Builds a JPEG from ImageData.
+ * encodeImageData requires colorSpace === 'RGB', so 4 components (RGBA) must
+ * be reduced to 3. There is deliberately NO bit-depth arithmetic here: we ask
+ * getPixels for componentSize:8, so the old bug (16→8 via >>8 on the range
+ * [0..32768], which made the image twice as dark) is impossible by construction.
  */
 async function imageDataToJpegBlob(imageData) {
     let toEncode = imageData;
@@ -91,9 +92,9 @@ async function imageDataToJpegBlob(imageData) {
 }
 
 /**
- * Складає PNG із ImageData нашим кодером — вхід без втрат.
- * Альфу відкидаємо: провайдеру вона не потрібна, а 3 компоненти замість 4 —
- * на чверть менше байтів у deflate.
+ * Builds a PNG from ImageData with our encoder — lossless input.
+ * Alpha is dropped: the provider does not need it, and 3 components instead of
+ * 4 is a quarter fewer bytes in deflate.
  */
 async function imageDataToPngBlob(imageData) {
     const src = await imageData.getData();
@@ -111,7 +112,7 @@ async function imageDataToPngBlob(imageData) {
             rgb[i * 3 + 2] = src[i * 4 + 2];
         }
     } else if (comps === 1) {
-        // Grayscale-документ: розгортаємо в RGB, бо провайдери чекають колір
+        // Grayscale document: expand to RGB, because providers expect color
         const count = w * h;
         rgb = new Uint8Array(count * 3);
         for (let i = 0; i < count; i++) {
@@ -123,12 +124,12 @@ async function imageDataToPngBlob(imageData) {
     }
     const t0 = Date.now();
     const png = encodePng(rgb, w, h, 3);
-    console.log(`[capture] PNG ${w}×${h}: ${(png.length / 1048576).toFixed(2)} МБ ` +
-                `за ${Date.now() - t0} мс`);
+    console.log(`[capture] PNG ${w}×${h}: ${(png.length / 1048576).toFixed(2)} MB ` +
+                `in ${Date.now() - t0} ms`);
     return new Blob([png], { type: 'image/png' });
 }
 
-/** Прямий шлях — документ не змінюється жодним чином. */
+/** Direct path — the document is not changed in any way. */
 async function captureDirect(bounds, useLayerOnly, lossless) {
     const params = {
         sourceBounds: {
@@ -137,8 +138,8 @@ async function captureDirect(bounds, useLayerOnly, lossless) {
         },
         applyAlpha: false,
         colorSpace: 'RGB',
-        // без явного профілю конверсія недетермінована — відомий симптом
-        // «black or negative type of image colors»
+        // without an explicit profile the conversion is nondeterministic — the known
+        // "black or negative type of image colors" symptom
         colorProfile: 'sRGB IEC61966-2.1',
         componentSize: 8,
     };
@@ -150,8 +151,8 @@ async function captureDirect(bounds, useLayerOnly, lossless) {
 }
 
 /**
- * Шлях через дублікат: конвертуємо КОПІЮ, зберігаємо JPEG, копію закриваємо.
- * imaging тут не задіяний узагалі, тому CMYK не має де впасти.
+ * Duplicate path: convert the COPY, save JPEG, close the copy.
+ * imaging is not involved here at all, so CMYK has nowhere to crash.
  */
 async function captureViaDuplicate(bounds, useLayerOnly, lossless) {
     const doc = app.activeDocument;
@@ -161,25 +162,26 @@ async function captureViaDuplicate(bounds, useLayerOnly, lossless) {
         dup = await doc.duplicate();
 
         if (useLayerOnly) {
-            // Не видаляємо верхньорівневі шари: активний шар може бути
-            // вкладений у групу. Ізолюємо його гілку видимістю на копії.
+            // Do not delete top-level layers: the active layer may be nested
+            // in a group. Isolate its branch by visibility on the copy.
             const keep = dup.activeLayers[0];
             if (!keep || !isolateLayerTree(dup.layers, keep.id)) {
                 throw new Error(captureI18n.t('capture.layerMissing'));
             }
         }
 
-        // ЗАПОБІЖНИК. convertMode без _target діє на АКТИВНИЙ документ. Якщо
-        // duplicate() чомусь не зробив копію активною, ми б сконвертували
-        // документ користувача — той самий необоротний CMYK→RGB, від якого
-        // тікали. Тому перевіряємо явно і краще відмовимось, ніж зіпсуємо макет.
+        // GUARD. convertMode without _target acts on the ACTIVE document. If
+        // duplicate() failed to make the copy active, we would convert the
+        // user's document — the same irreversible CMYK→RGB we were escaping.
+        // So we check explicitly and would rather refuse than ruin the layout.
         if (!app.activeDocument || app.activeDocument.id !== dup.id) {
             throw new Error(captureI18n.t('capture.copyInactive'));
         }
         const onDup = [{ _ref: 'document', _id: dup.id }];
 
-        // Спершу режим і бітність, потім кроп: convertMode на меншому полотні
-        // дешевший, але кроп ДО конверсії міняє bounds, тому порядок саме такий.
+        // Mode and bit depth first, then crop: convertMode on a smaller canvas
+        // is cheaper, but a crop BEFORE conversion changes bounds, so this order
+        // is required.
         if (!isSafeMode(dup.mode)) {
             await batchPlay([{
                 _obj: 'convertMode',
@@ -200,8 +202,8 @@ async function captureViaDuplicate(bounds, useLayerOnly, lossless) {
         });
 
         const folder = await uxpStorage.localFileSystem.getTemporaryFolder();
-        // PNG пише сам Photoshop — наш кодер тут не задіяний, тому поріг
-        // швидкості на цей шлях не поширюється взагалі.
+        // Photoshop itself writes the PNG — our encoder is not involved here, so
+        // the speed threshold does not apply to this path at all.
         if (lossless) {
             file = await folder.createFile(`cap_${Date.now()}.png`, { overwrite: true });
             await dup.saveAs.png(file, { compression: 6, interlaced: false }, true);
@@ -216,23 +218,23 @@ async function captureViaDuplicate(bounds, useLayerOnly, lossless) {
 
     } finally {
         if (dup) { try { await dup.closeWithoutSaving(); } catch (e) {
-            console.error('[capture] копія документа не закрилась:', e.message);
+            console.error('[capture] document copy did not close:', e.message);
         } }
         if (file) { try { await file.delete(); } catch (e) {} }
     }
 }
 
 /**
- * Захоплює виділену область як JPEG.
- * Викликати ВСЕРЕДИНІ core.executeAsModal.
+ * Captures the selected area as JPEG.
+ * Call INSIDE core.executeAsModal.
  *
- * @param {{left,top,right,bottom}} bounds — цілі межі (geometry.integerTarget)
- * @param {boolean} useLayerOnly — лише активний шар замість зведеного
- * @param {boolean} wantLossless — просити PNG замість JPEG. Вище LOSSLESS_MAX_PX
- *        це означає шлях через дублікат, а НЕ мовчазне повернення до JPEG.
- * @param {boolean} requirePng — PNG обов'язковий: у запит іде маска, а OpenAI вимагає
- *        однаковий формат входу й маски. Практично рівносильний wantLossless;
- *        лишається окремим, бо це вимога протоколу, а не побажання користувача.
+ * @param {{left,top,right,bottom}} bounds — integer bounds (geometry.integerTarget)
+ * @param {boolean} useLayerOnly — only the active layer instead of the composite
+ * @param {boolean} wantLossless — request PNG instead of JPEG. Above LOSSLESS_MAX_PX
+ *        this means the duplicate path, NOT a silent return to JPEG.
+ * @param {boolean} requirePng — PNG is mandatory: a mask goes in the request, and OpenAI
+ *        requires the same format for input and mask. Practically the same as wantLossless;
+ *        it stays separate because this is a protocol requirement, not a user preference.
  * @returns {Promise<{blob:Blob, docMode:string, bpc:number, viaDuplicate:boolean, lossless:boolean}>}
  */
 async function captureRegion(bounds, useLayerOnly = false, wantLossless = true,
@@ -249,20 +251,21 @@ async function captureRegion(bounds, useLayerOnly = false, wantLossless = true,
     }
 
     const lossless = wantLossless || requirePng;
-    /* Поріг стосується лише НАШОГО JS-кодера (fixed-Huffman без справжнього
-       deflate): на фотографії 2000×1500 він дає ~9 МБ і кілька секунд у JS.
-       Photoshop свій PNG пише сам і жодного порогу не потребує.
+    /* The threshold applies only to OUR JS encoder (fixed-Huffman without real
+       deflate): on a 2000×1500 photograph it produces ~9 MB and several seconds
+       in JS. Photoshop writes its own PNG and needs no threshold.
 
-       ⚠️ РАНІШЕ ТУТ БУЛА ТИХА ВТРАТА ФУНКЦІЇ: вище порогу галка «вхід без втрат»
-       мовчки ставала JPEG — але лише коли маска не потрібна. Тобто той самий
-       перемикач працював чи ні залежно від зовсім іншого налаштування (відсотка
-       контексту). Тепер поріг не скасовує вибір користувача, а лише перемикає
-       ВИКОНАВЦЯ: вище нього PNG пише Photoshop через дублікат документа. */
+       THIS USED TO BE A SILENT FEATURE LOSS: above the threshold the "lossless
+       input" checkbox quietly became JPEG — but only when no mask was needed.
+       The same switch worked or not depending on a completely different setting
+       (the context percent). Now the threshold does not cancel the user's
+       choice; it only switches the WRITER: above it Photoshop writes the PNG
+       through a document duplicate. */
     const viaDuplicateOnly = lossless && w * h > LOSSLESS_MAX_PX;
     if (viaDuplicateOnly) {
-        console.log(`[capture] ${w}×${h} = ${(w * h / 1e6).toFixed(1)} МП — вище порогу ` +
-                    `${LOSSLESS_MAX_PX / 1e6} МП для власного кодера: PNG пише Photoshop ` +
-                    'через дублікат документа');
+        console.log(`[capture] ${w}×${h} = ${(w * h / 1e6).toFixed(1)} MP — above the ` +
+                    `${LOSSLESS_MAX_PX / 1e6} MP threshold for our encoder: Photoshop writes the PNG ` +
+                    'through a document duplicate');
     }
 
     if (!viaDuplicateOnly && isSafeMode(docMode)) {
@@ -270,10 +273,10 @@ async function captureRegion(bounds, useLayerOnly = false, wantLossless = true,
             const blob = await captureDirect(bounds, useLayerOnly, lossless);
             return { blob, docMode, bpc, viaDuplicate: false, lossless };
         } catch (e) {
-            // Відома регресія: componentSize:8 із 16-бітного документа кидає
-            // «Photoshop Error. Code: -1» починаючи з PS 26.3 (у 25.0 працювало).
-            // Вручну 16→8 НЕ конвертуємо — саме там був баг подвійного затемнення.
-            console.warn(`[capture] прямий шлях не вдався (${e.message}) — через дублікат`);
+            // Known regression: componentSize:8 from a 16-bit document throws
+            // "Photoshop Error. Code: -1" starting with PS 26.3 (it worked in 25.0).
+            // Do NOT convert 16→8 by hand — that is where the double-darkening bug was.
+            console.warn(`[capture] direct path failed (${e.message}) — using a duplicate`);
         }
     }
 
@@ -282,55 +285,57 @@ async function captureRegion(bounds, useLayerOnly = false, wantLossless = true,
 }
 
 /**
- * Маска для запиту — або null із поясненням, ЧОМУ її нема.
+ * Request mask — or null with an explanation of WHY it is missing.
  *
- * ⚠️ ІНВАРІАНТ, ЗАРАДИ ЯКОГО ЦЕ ОКРЕМА ФУНКЦІЯ: маска їде ЛИШЕ разом із
- * PNG-входом. OpenAI вимагає, щоб вхід і маска були одного формату, і
- * розбіжність сервер НЕ відхиляє — він мовчки ігнорує маску, а модель
- * перемальовує весь кадр. Симптом у користувача: «модель не бачить виділення».
- * Тому краще свідомо втратити маску й записати причину, ніж відправити запит,
- * який тихо зробить не те.
+ * THE INVARIANT THIS FUNCTION EXISTS FOR: the mask travels ONLY with a PNG
+ * input. OpenAI requires the input and the mask to be the same format, and the
+ * server does NOT reject a mismatch — it silently ignores the mask, and the
+ * model redraws the whole frame. The user's symptom: "the model does not see
+ * the selection". Better to drop the mask on purpose and record the reason
+ * than to send a request that quietly does the wrong thing.
  *
- * Раніше це жило рядками всередині onGenerate, і єдиним гейтом був регекс по
- * тексту main.js у platform.test.js. Тепер інваріант перевіряється як функція.
+ * This used to live as lines inside onGenerate, and the only gate was a regex
+ * over the text of main.js in platform.test.js. The invariant is now tested as
+ * a function.
  *
- * @returns {{blob: Blob|null, bytes: number, reason: string}} reason непорожній
- *          рівно тоді, коли маски не буде
+ * @returns {{blob: Blob|null, bytes: number, reason: string}} reason is non-empty
+ *          exactly when there will be no mask
  */
 /**
- * Форма активного виділення в пікселях кадру ctx: 255 = «змінити тут».
- * Викликати ВСЕРЕДИНІ core.executeAsModal.
+ * Shape of the active selection in ctx-frame pixels: 255 = "change here".
+ * Call INSIDE core.executeAsModal.
  *
- * ⚠️ ЧОМУ ЦЕ МОЖЕ ПОВЕРНУТИ null І ЧОМУ ЦЕ НОРМАЛЬНО. `imaging.getSelection`
- * у CMYK-документі валить Photoshop (той самий SIGSEGV, що й getPixels —
- * див. коментар про imaging вгорі файлу), тому поза RGB/Grayscale/Lab ми до
- * нього не торкаємось узагалі. Немає форми — маска буде прямокутна, тобто
- * рівно та поведінка, що була до 2026-09-09. Деградація, не поломка.
+ * WHY THIS MAY RETURN null, AND WHY THAT IS NORMAL. `imaging.getSelection`
+ * crashes Photoshop on a CMYK document (the same SIGSEGV as getPixels —
+ * see the imaging comment at the top of this file), so outside
+ * RGB/Grayscale/Lab we do not touch it at all. No shape means a rectangular
+ * mask, exactly the behavior from before 2026-09-09. A degradation, not a break.
  *
  * @returns {Promise<{data: Uint8Array|null, reason: string}>}
  */
 async function selectionShape(ctx, target, docMode) {
     if (!isSafeMode(docMode)) {
-        return { data: null, reason: `${docMode}: getSelection поза RGB/Grayscale/Lab не чіпаємо` };
+        return { data: null, reason: `${docMode}: getSelection is not used outside RGB/Grayscale/Lab` };
     }
     let res = null;
     try {
         res = await imaging.getSelection({ documentID: app.activeDocument.id });
         const d = res.imageData;
 
-        /* ⚠️ sourceBounds У getSelection НЕ ПРАЦЮЄ ЯК КАДРУВАННЯ (виміряно в
-           PS 27.5, 2026-09-09): попросили кадр ctx 1920×391 — повернувся
-           растр 1920×340, тобто рівно рамка самого виділення. Тому кадр
-           складаємо самі: беремо, що дали, і кладемо у ctx за зсувом. */
+        /* sourceBounds in getSelection DOES NOT WORK AS A CROP (measured in
+           PS 27.5, 2026-09-09): we asked for a ctx frame of 1920×391 and got
+           a raster of 1920×340, exactly the selection's own frame. So we
+           assemble the frame ourselves: take what was returned and place it
+           into ctx at the offset. */
         const box = res.sourceBounds || target;
         const bw = box.right - box.left, bh = box.bottom - box.top;
         if (d.width !== bw || d.height !== bh) {
-            return { data: null, reason: `віддав ${d.width}×${d.height}, а рамка ${bw}×${bh}` };
+            return { data: null, reason: `returned ${d.width}×${d.height}, but the frame is ${bw}×${bh}` };
         }
 
         const raw = await d.getData();
         const comps = d.components || 1;
-        const out = new Uint8Array(ctx.w * ctx.h);   // 0 = «зберегти», поза виділенням
+        const out = new Uint8Array(ctx.w * ctx.h);   // 0 = "keep", outside the selection
         const dx = box.left - ctx.left, dy = box.top - ctx.top;
         for (let y = 0; y < d.height; y++) {
             const ty = y + dy;
@@ -350,13 +355,14 @@ async function selectionShape(ctx, target, docMode) {
 }
 
 function maskForRequest({ ctx, target, feather = 0, input, shape = null }) {
-    if (!input) return { blob: null, bytes: 0, source: '', reason: 'входу нема — маска ні до чого' };
+    if (!input) return { blob: null, bytes: 0, source: '', reason: 'no input — a mask has nothing to attach to' };
     if (input.type !== 'image/png') {
         return { blob: null, bytes: 0, source: '',
-                 reason: `вхід ${input.type}, а не PNG: OpenAI вимагає однаковий формат входу й маски` };
+                 reason: `input is ${input.type}, not PNG: OpenAI requires the same format for input and mask` };
     }
-    /* Форма справжнього виділення краща за його рамку: все, що ділить із ціллю
-       bounding box, лишається для моделі КОНТЕКСТОМ, а не дозволом малювати. */
+    /* The real selection shape is better than its frame: everything that shares
+       the bounding box with the target stays CONTEXT for the model, not permission
+       to paint. */
     try {
         const png = shape
             ? buildShapeMaskPng(ctx.w, ctx.h, shape, feather)
@@ -369,7 +375,7 @@ function maskForRequest({ ctx, target, feather = 0, input, shape = null }) {
             source: shape ? 'selection' : 'rectangle', reason: '',
         };
     } catch (e) {
-        return { blob: null, bytes: 0, source: '', reason: `маска не побудована: ${e.message}` };
+        return { blob: null, bytes: 0, source: '', reason: `mask was not built: ${e.message}` };
     }
 }
 

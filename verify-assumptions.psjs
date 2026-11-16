@@ -1,25 +1,25 @@
 /* ============================================================================
- *  verify-assumptions.psjs — перевірка UXP-боку place.js.
+ *  verify-assumptions.psjs — a check of the UXP side of place.js.
  *
- *  ЯК ЗАПУСТИТИ
- *    Photoshop → File → Scripts → Browse… → вибрати цей файл.
+ *  HOW TO RUN
+ *    Photoshop → File → Scripts → Browse… → choose this file.
  *
- *  ЩО ЦЕ ДАЄ І ЧОГО ТУТ БІЛЬШЕ НЕМА
- *    Раніше цей скрипт перевіряв усі передумови place.js. Тепер вісім із них
- *    ВЖЕ ПЕРЕВІРЕНО в Photoshop 27.5.0 через Action Manager (ExtendScript —
- *    той самий шар, що й batchPlay, лише інший фасад). Звіти лежать у
- *    scratchpad/psverify/probe*.txt, підсумок — у README.
+ *  WHAT THIS GIVES, AND WHAT IS NO LONGER HERE
+ *    This script used to check every assumption of place.js. Eight of them are
+ *    ALREADY CHECKED in Photoshop 27.5.0 through the Action Manager (ExtendScript —
+ *    the same layer as batchPlay, only a different facade). The reports are in
+ *    scratchpad/psverify/probe*.txt, the summary is in README.
  *
- *    Лишилися рівно дві речі, яких тим шляхом дістати НЕ можна:
- *      A. чи batchPlay-обгортка UXP передає ті самі descriptor-и, що
+ *    Exactly two things remain that cannot be reached that way:
+ *      A. whether the UXP batchPlay wrapper passes the same descriptors as
  *         executeAction (JSON → ActionDescriptor: _unit/_obj/_enum);
- *      B. модуль imaging — його в ExtendScript немає взагалі.
+ *      B. the imaging module — ExtendScript does not have it at all.
  *
- *    Метрика та сама: residual мусить бути 0 у кожному рядку.
+ *    The metric is the same: residual must be 0 on every line.
  *
- *  ⚠️ ТЕСТ 8 МОЖЕ ПОВАЛИТИ PHOTOSHOP — це його очікуваний результат
- *     (imaging.getPixels у CMYK). Вимкнений. Щоб увімкнути — RUN_CMYK_CRASH_TEST
- *     = true і спершу збережіть роботу. Звіт пишеться на диск ДО цього тесту.
+ *  TEST 8 CAN CRASH PHOTOSHOP — that is its expected result
+ *     (imaging.getPixels in CMYK). It is off. To turn it on, set RUN_CMYK_CRASH_TEST
+ *     = true and save your work first. The report is written to disk BEFORE this test.
  * ========================================================================== */
 
 const RUN_CMYK_CRASH_TEST = false;
@@ -35,7 +35,7 @@ const n4 = v => (v === null || v === undefined) ? 'null' : String(Math.round(v *
 const fmt = f => f ? `L${n4(f.left)} T${n4(f.top)} R${n4(f.right)} B${n4(f.bottom)} ` +
                      `(${n4(f.right - f.left)}×${n4(f.bottom - f.top)})` : 'null';
 
-/* ── мінімальний PNG (stored deflate — файл маленький) ─────────────────────── */
+/* ── a minimal PNG (stored deflate — the file is small) ────────────────────── */
 
 const CRC = (() => {
     const t = new Uint32Array(256);
@@ -68,7 +68,7 @@ function chunk(type, data) {
     w32(out, 8 + n, crc32(cb));
     return out;
 }
-/** RGB із контрастною рамкою 50 px — обрізання по канві видно на око. */
+/** RGB with a contrasting 50 px frame — canvas clipping is visible by eye. */
 function makePng(w, h, ppi) {
     const rowBytes = w * 3, filtLen = h * (1 + rowBytes);
     const filt = new Uint8Array(filtLen);
@@ -110,8 +110,8 @@ function makePng(w, h, ppi) {
     return png;
 }
 
-/* ── ТОЧНІ КОПІЇ примітивів place.js. Якщо тут residual 0 — batchPlay
- *    передає descriptor-и так само, як executeAction. ─────────────────────── */
+/* ── EXACT COPIES of the place.js primitives. If residual is 0 here, batchPlay
+ *    passes descriptors the same way executeAction does. ──────────────────── */
 
 const PX = v => ({ _unit: 'pixelsUnit', _value: v });
 const unwrap = n => (n && typeof n === 'object' && '_value' in n) ? n._value : n;
@@ -178,7 +178,7 @@ async function placeFile(file) {
     }], {});
 }
 
-/* геометрія — та сама арифметика, що в geometry.js */
+/* geometry — the same arithmetic as in geometry.js */
 function integerTarget(b) {
     const left = Math.round(b.left), top = Math.round(b.top);
     const right = Math.round(b.right), bottom = Math.round(b.bottom);
@@ -219,16 +219,16 @@ async function setPref(value) {
     } catch (e) {}
 }
 
-/* ── прогін ───────────────────────────────────────────────────────────────── */
+/* ── the run ──────────────────────────────────────────────────────────────── */
 
 async function run() {
     const M = constants.NewDocumentMode;
     const D = constants.BitsPerChannelType;
 
-    say('=== A. batchPlay-паритет: чи UXP передає ті самі descriptor-и ===');
+    say('=== A. batchPlay parity: does UXP pass the same descriptors ===');
     say(`Photoshop ${app.version}`);
     const open = app.documents.length;
-    say(`відкритих документів: ${open} — скрипт їх не чіпає`);
+    say(`documents open: ${open} — the script does not touch them`);
 
     const fileSq = await writePng('vt_sq.png',  makePng(1024, 1024, 300));
     const fileWd = await writePng('vt_wd.png',  makePng(1000, 600, 300));
@@ -237,14 +237,14 @@ async function run() {
     if (prefWas === true) await setPref(false);
 
     const CASES = [
-        { tag: 'RGB8 300  парне 200×200',   mode: M.RGB,  depth: D.EIGHT,   w: 2000, h: 1500, res: 300, file: fileSq, nat: {w:1024,h:1024}, b: {left:400, top:300, right:600, bottom:500} },
-        { tag: 'RGB8 300  НЕПАРНЕ 201×201', mode: M.RGB,  depth: D.EIGHT,   w: 2000, h: 1500, res: 300, file: fileSq, nat: {w:1024,h:1024}, b: {left:333, top:277, right:534, bottom:478} },
-        { tag: 'RGB8 300  дробові межі',    mode: M.RGB,  depth: D.EIGHT,   w: 2000, h: 1500, res: 300, file: fileSq, nat: {w:1024,h:1024}, b: {left:332.6, top:276.4, right:533.5, bottom:477.5} },
+        { tag: 'RGB8 300  even 200×200',   mode: M.RGB,  depth: D.EIGHT,   w: 2000, h: 1500, res: 300, file: fileSq, nat: {w:1024,h:1024}, b: {left:400, top:300, right:600, bottom:500} },
+        { tag: 'RGB8 300  ODD 201×201', mode: M.RGB,  depth: D.EIGHT,   w: 2000, h: 1500, res: 300, file: fileSq, nat: {w:1024,h:1024}, b: {left:333, top:277, right:534, bottom:478} },
+        { tag: 'RGB8 300  fractional bounds',    mode: M.RGB,  depth: D.EIGHT,   w: 2000, h: 1500, res: 300, file: fileSq, nat: {w:1024,h:1024}, b: {left:332.6, top:276.4, right:533.5, bottom:477.5} },
         { tag: 'RGB8 300  cover 400×400',   mode: M.RGB,  depth: D.EIGHT,   w: 2000, h: 1500, res: 300, file: fileWd, nat: {w:1000,h:600},  b: {left:700, top:500, right:1100, bottom:900} },
-        { tag: 'RGB8 300  поза канвою',     mode: M.RGB,  depth: D.EIGHT,   w: 2000, h: 1500, res: 300, file: fileSq, nat: {w:1024,h:1024}, b: {left:1850, top:1400, right:2150, bottom:1700} },
-        { tag: 'CMYK8 300 НЕПАРНЕ',         mode: M.CMYK, depth: D.EIGHT,   w: 2000, h: 1500, res: 300, file: fileSq, nat: {w:1024,h:1024}, b: {left:333, top:277, right:534, bottom:478} },
-        { tag: 'CMYK16 300 НЕПАРНЕ',        mode: M.CMYK, depth: D.SIXTEEN, w: 2000, h: 1500, res: 300, file: fileSq, nat: {w:1024,h:1024}, b: {left:333, top:277, right:534, bottom:478} },
-        { tag: 'RGB16 72  НЕПАРНЕ',         mode: M.RGB,  depth: D.SIXTEEN, w: 800,  h: 600,  res: 72,  file: fileSq, nat: {w:1024,h:1024}, b: {left:251, top:131, right:452, bottom:332} },
+        { tag: 'RGB8 300  outside the canvas',     mode: M.RGB,  depth: D.EIGHT,   w: 2000, h: 1500, res: 300, file: fileSq, nat: {w:1024,h:1024}, b: {left:1850, top:1400, right:2150, bottom:1700} },
+        { tag: 'CMYK8 300 ODD',         mode: M.CMYK, depth: D.EIGHT,   w: 2000, h: 1500, res: 300, file: fileSq, nat: {w:1024,h:1024}, b: {left:333, top:277, right:534, bottom:478} },
+        { tag: 'CMYK16 300 ODD',        mode: M.CMYK, depth: D.SIXTEEN, w: 2000, h: 1500, res: 300, file: fileSq, nat: {w:1024,h:1024}, b: {left:333, top:277, right:534, bottom:478} },
+        { tag: 'RGB16 72  ODD',         mode: M.RGB,  depth: D.SIXTEEN, w: 800,  h: 600,  res: 72,  file: fileSq, nat: {w:1024,h:1024}, b: {left:251, top:131, right:452, bottom:332} },
     ];
 
     let good = 0, converted = [];
@@ -264,7 +264,7 @@ async function run() {
                 _options: { dialogOptions: 'dontDisplay' } }], {}); } catch (e) {}
 
             let cur = await readSoFrame();
-            const lines = [`після reset ${fmt(cur)}`];
+            const lines = [`after reset ${fmt(cur)}`];
             const hit = f => f && Math.abs(dst.left - f.left) < 0.01 && Math.abs(dst.top - f.top) < 0.01
                           && Math.abs(tw - (f.right - f.left)) < 0.01
                           && Math.abs(th - (f.bottom - f.top)) < 0.01;
@@ -277,11 +277,11 @@ async function run() {
                 if (Math.abs(pw - 100) > 1e-9 || Math.abs(ph - 100) > 1e-9) {
                     await scaleSo(pw, ph);
                     cur = await readSoFrame();
-                    lines.push(`масштаб ${fmt(cur)}  pw=${n4(pw)}% ph=${n4(ph)}%`);
+                    lines.push(`scale ${fmt(cur)}  pw=${n4(pw)}% ph=${n4(ph)}%`);
                 }
                 await moveSo(dst.left - cur.left, dst.top - cur.top);
                 cur = await readSoFrame();
-                lines.push(`зсув    ${fmt(cur)}`);
+                lines.push(`move    ${fmt(cur)}`);
             }
             const modeAfter = String(app.activeDocument.mode);
             const bpcAfter = app.activeDocument.bitsPerChannel;
@@ -298,33 +298,33 @@ async function run() {
 
             say('');
             say(`  ${c.tag}`);
-            say(`      ціль [${dst.mode}] ${fmt(dst)}`);
+            say(`      target [${dst.mode}] ${fmt(dst)}`);
             for (const l of lines) say(`      ${l}`);
-            say(`      residual ${res ? `dx=${n4(res.dx)} dy=${n4(res.dy)} dw=${n4(res.dw)} dh=${n4(res.dh)}` : 'не виміряний'}` +
-                `  => ${ok ? 'ТОЧНО' : 'ЗСУВ'} | проходів ${passes}` +
-                ` | нативний растр ${cur && cur.size ? `${n4(cur.size.w)}×${n4(cur.size.h)}` : '?'}` +
-                ` | перекіс ${cur ? cur.skewed : '?'}` +
-                ` | документ ${modeAfter}/${bpcAfter}${conv ? ' ← СКОНВЕРТОВАНО!' : ''}`);
+            say(`      residual ${res ? `dx=${n4(res.dx)} dy=${n4(res.dy)} dw=${n4(res.dw)} dh=${n4(res.dh)}` : 'not measured'}` +
+                `  => ${ok ? 'EXACT' : 'SHIFT'} | passes ${passes}` +
+                ` | native raster ${cur && cur.size ? `${n4(cur.size.w)}×${n4(cur.size.h)}` : '?'}` +
+                ` | skew ${cur ? cur.skewed : '?'}` +
+                ` | document ${modeAfter}/${bpcAfter}${conv ? ' ← CONVERTED!' : ''}`);
 
             await doc.closeWithoutSaving(); doc = null;
         } catch (e) {
-            say(`  ${c.tag} — ПОМИЛКА: ${e.message}`);
+            say(`  ${c.tag} — ERROR: ${e.message}`);
             if (doc) { try { await doc.closeWithoutSaving(); } catch (e2) {} }
         }
     }
     if (prefWas === true) await setPref(true);
 
     say('');
-    say(`ПІДСУМОК A: ${good}/${CASES.length} точно` +
-        (converted.length ? `; СКОНВЕРТОВАНО: ${converted.join(', ')}` : '; жоден документ не сконвертовано'));
+    say(`SUMMARY A: ${good}/${CASES.length} exact` +
+        (converted.length ? `; CONVERTED: ${converted.join(', ')}` : '; no document was converted'));
     if (good < CASES.length) {
-        say('  ⚠️ Якщо через ExtendScript ті самі кейси давали 0 (див. probe6.txt), а тут ні —');
-        say('     різниця саме в обгортці batchPlay: перевірте _unit/_obj у scaleSo/moveSo.');
+        say('  If the same cases gave 0 through ExtendScript (see probe6.txt) and not here —');
+        say('     the difference is in the batchPlay wrapper: check _unit/_obj in scaleSo/moveSo.');
     }
 
-    /* ── B. imaging: чого з ExtendScript не видно ───────────────────────── */
+    /* ── B. imaging: what cannot be seen from ExtendScript ──────────────── */
     say('');
-    say('=== B. imaging — модуль, якого в ExtendScript немає ===');
+    say('=== B. imaging — the module ExtendScript does not have ===');
 
     let d3 = null;
     try {
@@ -337,34 +337,34 @@ async function run() {
                 componentSize: 8, applyAlpha: false,
             });
             const data = await px.imageData.getData();
-            say(`  [7] getPixels componentSize:8 з 16-бітного документа: ПРАЦЮЄ — ` +
-                `${px.imageData.components} комп., componentSize ${px.imageData.componentSize}, ` +
-                `${data.length} байтів. Прямий шлях capture.js достатній, дублікат не потрібен.`);
+            say(`  [7] getPixels componentSize:8 from a 16-bit document: WORKS — ` +
+                `${px.imageData.components} comp., componentSize ${px.imageData.componentSize}, ` +
+                `${data.length} bytes. The direct path in capture.js is enough, a duplicate is not needed.`);
             px.imageData.dispose();
         } catch (e) {
-            say(`  [7] getPixels componentSize:8 з 16 біт: КИДАЄ «${e.message}» — ` +
-                'відома регресія з PS 26.3. capture.js це переживає: тихо йде через дублікат.');
+            say(`  [7] getPixels componentSize:8 from 16-bit: THROWS "${e.message}" — ` +
+                'a known regression since PS 26.3. capture.js survives it: it quietly goes through a duplicate.');
         }
         await d3.closeWithoutSaving(); d3 = null;
     } catch (e) {
-        say(`  [7] не вдалось перевірити: ${e.message}`);
+        say(`  [7] could not check: ${e.message}`);
         if (d3) { try { await d3.closeWithoutSaving(); } catch (e2) {} }
     }
 
-    /* звіт на диск ДО небезпечного тесту */
-    let reportPath = '(не збережено)';
+    /* the report on disk BEFORE the dangerous test */
+    let reportPath = '(not saved)';
     try {
         const tmp = await fs.getTemporaryFolder();
         const rf = await tmp.createFile(`ai-image-ps-verify-${Date.now()}.txt`, { overwrite: true });
         await rf.write(log.join('\n'));
         reportPath = rf.nativePath;
-    } catch (e) { reportPath = 'не вдалось: ' + e.message; }
+    } catch (e) { reportPath = 'failed: ' + e.message; }
     say('');
-    say(`Звіт: ${reportPath}`);
+    say(`Report: ${reportPath}`);
 
     if (RUN_CMYK_CRASH_TEST) {
         say('');
-        say('⚠️ [8] getPixels у CMYK — Photoshop може впасти, це очікуваний результат.');
+        say('[8] getPixels in CMYK — Photoshop may crash, that is the expected result.');
         let d4 = null;
         try {
             d4 = await app.documents.add({ name: 'VTCMYK', width: 200, height: 200, resolution: 72,
@@ -375,25 +375,25 @@ async function run() {
                 componentSize: 8, applyAlpha: false,
             });
             const data = await px.imageData.getData();
-            say(`  [8] НЕ впав, ${data.length} байтів — CMYK можна читати напряму, ` +
-                'дублікат у capture.js стає непотрібним.');
+            say(`  [8] did NOT crash, ${data.length} bytes — CMYK can be read directly, ` +
+                'the duplicate in capture.js becomes unnecessary.');
             px.imageData.dispose();
             await d4.closeWithoutSaving();
         } catch (e) {
-            say(`  [8] кинув «${e.message}» — принаймні gracefully. Дублікат потрібен.`);
+            say(`  [8] threw "${e.message}" — at least gracefully. A duplicate is needed.`);
             if (d4) { try { await d4.closeWithoutSaving(); } catch (e2) {} }
         }
     } else {
-        say('  [8] getPixels у CMYK — тест вимкнено (RUN_CMYK_CRASH_TEST = false).');
-        say('      capture.js CMYK через imaging не читає взагалі, тому для роботи це не критично.');
+        say('  [8] getPixels in CMYK — the test is off (RUN_CMYK_CRASH_TEST = false).');
+        say('      capture.js does not read CMYK through imaging at all, so this is not critical for the work.');
     }
 
     try { await fileSq.delete(); } catch (e) {}
     try { await fileWd.delete(); } catch (e) {}
 
     say('');
-    say(`відкритих документів на виході: ${app.documents.length} (було ${open})`);
-    say('=== кінець ===');
+    say(`documents open on the way out: ${app.documents.length} (was ${open})`);
+    say('=== end ===');
 
     try {
         const tmp = await fs.getTemporaryFolder();
@@ -401,12 +401,12 @@ async function run() {
         await rf.write(log.join('\n'));
     } catch (e) {}
 
-    await core.showAlert(`Перевірка UXP-боку завершена.\n\nA: ${good}/${CASES.length} точно` +
-        `\n\nЗвіт: ${reportPath}\n\nДеталі — Plugins → Development → Show Console.`);
+    await core.showAlert(`UXP-side check finished.\n\nA: ${good}/${CASES.length} exact` +
+        `\n\nReport: ${reportPath}\n\nDetails — Plugins → Development → Show Console.`);
 }
 
-core.executeAsModal(run, { commandName: 'Перевірка UXP-боку place.js' })
+core.executeAsModal(run, { commandName: 'UXP-side check of place.js' })
     .catch(e => {
         console.error(e);
-        core.showAlert('Перевірка обірвалась: ' + (e && e.message ? e.message : e));
+        core.showAlert('The check was interrupted: ' + (e && e.message ? e.message : e));
     });

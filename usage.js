@@ -1,21 +1,21 @@
 /* ============================================================================
- *  usage.js — постійний журнал запитів і оцінка їхньої вартості.
+ *  usage.js — a persistent request ledger and an estimate of their cost.
  *
- *  Чистий модуль: без Photoshop/DOM/localStorage, тому тарифну арифметику й
- *  часові зрізи можна перевірити звичайним `node --test`.
+ *  A pure module: no Photoshop/DOM/localStorage, so the pricing arithmetic and
+ *  time slices can be checked with ordinary `node --test`.
  *
- *  Ціни — стандартний платний API, USD, перевірено 2026-09-09:
+ *  Prices are the standard paid API, USD, verified 2026-09-09:
  *    OpenAI: https://developers.openai.com/api/docs/pricing
  *            https://developers.openai.com/api/docs/models/gpt-image-1.5
  *    Google: https://ai.google.dev/gemini-api/docs/pricing
- *  2026-10-12 OpenAI звірено повторно: тарифи 2.5 без змін ($5 / $8 / $30).
+ *  2026-10-12 OpenAI checked again: 2.5 rates unchanged ($5 / $8 / $30).
  *
- *  Рядки вимкнених моделей НЕ видаляємо. Пікер їх уже не пропонує
- *  (providers/openai.js: RETIRED), але запит, відправлений до вимкнення, усе
- *  одно мусить порахуватись, а не лягти в журнал як «невідома модель».
+ *  Rows for retired models are NOT deleted. The picker no longer offers them
+ *  (providers/openai.js: RETIRED), but a request sent before shutdown must
+ *  still be priced, not land in the ledger as an "unknown model".
  *
- *  Розрахована сума записується в журнал. Оновлення таблиці цін у майбутньому
- *  не змінить старі витрати заднім числом.
+ *  The computed amount is written into the ledger. A future price-table update
+ *  will not change old costs retroactively.
  * ========================================================================== */
 
 const PRICE_VERSION = '2026-09-09';
@@ -23,10 +23,10 @@ const MAX_ENTRIES = 500;
 const MAX_AGE_DAYS = 365;
 
 const OPENAI = {
-    // gpt-image-2.5 тарифікується так само, як gpt-image-2. Таблиці «за
-    // картинку» в нього немає взагалі: рівні xhigh/max відрізняються саме
-    // кількістю вихідних токенів, тому фіксована ціна тут була б вигадкою.
-    // Якщо API не поверне output usage — записуємо вартість як невідому.
+    // gpt-image-2.5 is priced the same way as gpt-image-2. It has no "per
+    // image" table at all: xhigh/max differ exactly in the number of output
+    // tokens, so a fixed price here would be invented. If the API does not
+    // return output usage, the cost is recorded as unknown.
     'gpt-image-2.5-sunburst': {
         textIn: 5, imageIn: 8, imageOut: 30,
     },
@@ -36,7 +36,7 @@ const OPENAI = {
     'gpt-image-2': {
         textIn: 5, imageIn: 8, imageOut: 30,
     },
-    // Вимикаються: 1.5 і 1-mini — 2026-12-01, gpt-image-1 — 2026-10-23.
+    // Shutting down: 1.5 and 1-mini — 2026-12-01, gpt-image-1 — 2026-10-23.
     'gpt-image-1.5': {
         textIn: 5, imageIn: 8, imageOut: 32,
         flat: {
@@ -64,8 +64,8 @@ const OPENAI = {
 };
 
 const GOOGLE = {
-    // 4K = 3780 токенів → $0.113 (сторінка цін Google, 2026-10-08). Сторонні
-    // огляди пишуть $0.0756 — це 2520 токенів, як у Nano Banana 2; невірно.
+    // 4K = 3780 tokens → $0.113 (Google pricing page, 2026-10-08). Third-party
+    // writeups say $0.0756 — that is 2520 tokens, as for Nano Banana 2; wrong.
     'gemini-nano-banana-2.1': {
         input: 1.5, textOut: 7.5, imageOut: 30,
         flat: { '1K': 0.0336, '2K': 0.0504, '4K': 0.113 },
@@ -89,19 +89,19 @@ const GOOGLE = {
 };
 
 /**
- * Типові токени за парою (модель, рівень якості) — насіння прогнозу ціни.
+ * Typical tokens for a (model, quality) pair — the seed of the price forecast.
  *
- * ⚠️ ЦЕ ВИМІР, А НЕ ТАРИФ. Медіани з 80 справжніх запитів у журналі
- * (2026-08-11…2026-09-09). Головне, що показала вибірка: вихідні токени
- * визначає РІВЕНЬ ЯКОСТІ, а не площа запиту. Кореляція з мегапікселями
- * всередині одного рівня — лише +0.28…+0.58 при розкиді ±40%, тому
- * коефіцієнт «токенів на мегапіксель» був би вигаданою точністю.
+ * THIS IS A MEASUREMENT, NOT A TARIFF. Medians from 80 real ledger requests
+ * (2026-08-11…2026-09-09). What the sample showed: output tokens are set by
+ * the QUALITY LEVEL, not the request area. Correlation with megapixels inside
+ * one level is only +0.28…+0.58 with a spread of ±40%, so a "tokens per
+ * megapixel" coefficient would be invented precision.
  *
- * Вхідні токени тримаємо окремо для кожного рівня НАВМИСНО: на `low`
- * плагін шле дрібний кадр (медіана 373), на `high` — великий (1556), і
- * спільна константа помилялась на `low` удвічі.
+ * Input tokens are kept separate for each level ON PURPOSE: at `low` the
+ * plugin sends a small frame (median 373), at `high` a large one (1556), and
+ * a shared constant was wrong by 2× at `low`.
  *
- *   модель                 рівень   in     out     справжня медіана ціни
+ *   model                  level    in     out     real median price
  *   gpt-image-2            low      373    141     $0.0074  (n=15)
  *   gpt-image-2            medium   1512   1932    $0.0682  (n=34)
  *   gpt-image-2            high     1556   16399   $0.5023  (n=25)
@@ -109,8 +109,8 @@ const GOOGLE = {
  *   gpt-image-2.5-sunburst max      685    7062    $0.2172  (n=2)
  *   gpt-image-2.5-flare    high     1522   3912    $0.1293  (n=1)
  *
- * Рядки 2.5 стоять на кількох спостереженнях — прогноз для них навмисно
- * подається як приблизний, а не як точна сума.
+ * The 2.5 rows rest on a few observations — the forecast for them is
+ * deliberately presented as approximate, not as an exact sum.
  */
 const SEED_TOKENS = {
     'gpt-image-2': {
@@ -127,10 +127,10 @@ const SEED_TOKENS = {
     },
 };
 
-/** Спостережений розкид усередині рівня — показуємо вилку, а не одну цифру. */
+/** Observed spread inside a level — show a range, not a single figure. */
 const FORECAST_SPREAD = 0.4;
 
-/** Скільки власних запитів треба, щоб довіряти журналу користувача більше за насіння. */
+/** How many of the user's own requests are needed before their ledger beats the seed. */
 const MIN_OWN_SAMPLES = 3;
 
 const finite = value => {
@@ -159,8 +159,8 @@ function openAIInputCost(usage, price, hasImageInput) {
     if (text || image) {
         return perMillion(text, price.textIn) + perMillion(image, price.imageIn);
     }
-    // Старі/окремі відповіді дають лише загальну кількість. Для image edit
-    // переважна частина input — зображення, для generation — текст.
+    // Older or partial responses give only a total count. For an image edit
+    // most of the input is the image; for generation it is text.
     const total = finite(usage?.input_tokens ?? usage?.inputTokens);
     return perMillion(total, hasImageInput ? price.imageIn : price.textIn);
 }
@@ -173,7 +173,7 @@ function fixedOpenAIOutput(price, quality, size, imageCount) {
     return finite(price.flat[q][shape]) * Math.max(1, finite(imageCount));
 }
 
-/** Маршрут запиту в журналі. Записи давніших версій його не мають — вони edits. */
+/** Request route in the ledger. Older entries do not have it — they are edits. */
 const DEFAULT_ROUTE = 'edits';
 
 function median(values) {
@@ -184,19 +184,20 @@ function median(values) {
 }
 
 /**
- * Скільки токенів дав САМ користувач на цій парі модель+якість.
- * @param {number} need — скільки спостережень достатньо. Порогів два навмисно:
- *        щоб ПЕРЕБИТИ вимірене насіння, потрібно MIN_OWN_SAMPLES; а там, де
- *        насіння нема взагалі (рідкісні рівні 2.5), одне спостереження вже
- *        краще за порожню картку — інакше прогноз не з'явиться ніколи.
+ * How many tokens the user THEMSELVES produced for this model+quality pair.
+ * @param {number} need — how many observations are enough. Two thresholds on purpose:
+ *        beating the measured seed takes MIN_OWN_SAMPLES; where there is no seed
+ *        at all (rare 2.5 levels), one observation is already better than an empty
+ *        card — otherwise the forecast would never appear.
  */
 function ownTokens(history, model, quality, need, route = DEFAULT_ROUTE) {
     if (!Array.isArray(history)) return null;
     const name = modelName(model);
-    /* ⚠️ Маршрут — частина ключа, а не подробиця. Уточнення через /v1/responses
-       тягне з собою розмову: у ньому інші вхідні токени й інша модель-господар.
-       Змішані в одну медіану з images/edits, вони псують обидві оцінки. Записи
-       без поля route — з версій до 2026-09-09 — це саме edits, тому дефолт такий. */
+    /* The route is part of the key, not a detail. Refine via /v1/responses
+       carries the conversation with it: different input tokens and a different
+       host model. Mixed into one median with images/edits, they spoil both
+       estimates. Entries without a route field — from versions before 2026-09-09 —
+       are exactly edits, so that is the default. */
     const mine = history.filter(e => e && modelName(e.model) === name && e.quality === quality
                                   && (e.route || DEFAULT_ROUTE) === route
                                   && Number(e.outputTokens) > 0);
@@ -210,17 +211,18 @@ function ownTokens(history, model, quality, need, route = DEFAULT_ROUTE) {
 }
 
 /**
- * Скільки цей запит ІМОВІРНО коштуватиме — до натискання кнопки.
+ * What this request will PROBABLY cost — before the button is pressed.
  *
- * ⚠️ Навіщо окремо від estimateCost: та рахує ФАКТ і вимагає `usage` з
- * відповіді. У gpt-image-2/2.5 немає таблиці «за картинку», тому до запиту
- * факту взятися нізвідки — а саме там ціна й вирішує, натискати чи ні.
+ * Why this is separate from estimateCost: that one computes the FACT and needs
+ * `usage` from the response. gpt-image-2/2.5 has no "per image" table, so before
+ * the request there is nowhere for a fact to come from — and that is exactly
+ * where the price decides whether to press the button.
  *
- * Власний журнал користувача має пріоритет над вбудованим насінням: у нього
- * свої сюжети й свої розміри виділень, і після MIN_OWN_SAMPLES запитів його
- * медіана точніша за нашу. Панель через це самокалібрується, не ходячи в мережу.
+ * The user's own ledger outranks the built-in seed: their subjects and selection
+ * sizes differ, and after MIN_OWN_SAMPLES requests their median is more accurate
+ * than ours. The panel calibrates itself this way, without going to the network.
  *
- * @param {object[]} [history] — записи журналу (ledger.load())
+ * @param {object[]} [history] — ledger entries (ledger.load())
  * @returns {{usd:number|null, low:number, high:number, method:string, samples:number}}
  */
 function forecastOpenAI({ model, quality, plan, history }) {
@@ -228,7 +230,7 @@ function forecastOpenAI({ model, quality, plan, history }) {
     const price = OPENAI[modelName(model)];
     if (!price) return none('unknown-model');
 
-    // Моделі з тарифом «за картинку» знають свою ціну точно — вилка не потрібна.
+    // Models with a per-image tariff know their price exactly — no range is needed.
     const flat = fixedOpenAIOutput(price, quality, plan?.size, 1);
     if (flat !== null) {
         const usd = perMillion(SEED_TOKENS[modelName(model)]?.[quality]?.in ?? 1500, price.imageIn) + flat;
@@ -251,7 +253,7 @@ function forecastOpenAI({ model, quality, plan, history }) {
     };
 }
 
-/** Прогноз для будь-якого провайдера. Google має фіксовану ціну за картинку. */
+/** Forecast for any provider. Google has a fixed price per image. */
 function forecastCost({ provider, model, quality, plan, history }) {
     if (provider === 'openai') return forecastOpenAI({ model, quality, plan, history });
     if (provider === 'google') {
@@ -306,9 +308,9 @@ function estimateGoogle({ model, plan, usage, imageCount }) {
         };
     }
 
-    // candidatesTokenCount містить і картинку, і текст, тому не множимо його
-    // на textOut: це подвоїло б оплату зображення. Без деталізації беремо
-    // офіційну ціну картинки заданого розміру.
+    // candidatesTokenCount contains both the image and the text, so we do not
+    // multiply it by textOut: that would double-charge the image. Without a
+    // breakdown we take the official image price for the requested size.
     const flat = googleFlatOutput(price, plan?.imageSize, imageCount);
     if (flat === null) return { usd: null, method: 'missing-output-usage' };
     return { usd: input + text + flat, method: input || text ? 'tokens+flat' : 'flat' };
@@ -402,8 +404,8 @@ function formatUsd(value) {
 
 function formatTokens(value) {
     const n = finite(value);
-    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}м`;
-    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}к`;
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
     return String(n);
 }
 

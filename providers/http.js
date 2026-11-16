@@ -1,34 +1,35 @@
 /* ============================================================================
- *  providers/http.js — спільна транспортна частина для всіх провайдерів.
+ *  providers/http.js — shared transport for every provider.
  *
- *  Виправляє три дефекти старих SDK:
- *   1. Таймаут через Promise.race не СКАСОВУВАВ запит — fetch продовжував
- *      висіти, і панель могла мовчати до 15 хвилин. Тут AbortController.
- *   2. retryWithBackoff відкидав усе 4xx, тобто НЕ ретраїв 429 (rate limit),
- *      хоч саме він і потребує ретраю. Тут 429/408/5xx ретраяться з повагою
- *      до Retry-After, а 400/401/403/404 — ні.
- *   3. Помилки провайдера падали як TypeError на розборі відповіді. Тут завжди
- *      читабельний текст українською.
+ *  Fixes three defects of the old SDKs:
+ *   1. A timeout via Promise.race did NOT CANCEL the request — fetch kept
+ *      hanging, and the panel could stay silent for up to 15 minutes. AbortController here.
+ *   2. retryWithBackoff rejected every 4xx, so it did NOT retry 429 (rate limit),
+ *      even though that is the one that needs a retry. Here 429/408/5xx are retried
+ *      with respect for Retry-After, and 400/401/403/404 are not.
+ *   3. Provider errors fell out as a TypeError while parsing the response. Here the
+ *      text is always readable English.
  * ========================================================================== */
 
 const httpI18n = require('../i18n.js');
 const transport = require('./curl-transport.js');
 
 /**
- * Єдина точка виходу в мережу.
+ * The single exit to the network.
  *
- * ⚠️ ЧОМУ НЕ ПРОСТО fetch: UXP-дозвіл `network.domains` не обходить системний
- * фаєрвол — запит іде з процесу Photoshop, і правило «Block Photoshop» його
- * ріже (виміряно: Socket із процесу PS падає, дочірній curl тими ж секундами
- * отримує 401/403). Тому в режимі 'auto' перша мережева відмова перемикає
- * подальші запити на curl-транспорт, а 'curl'/'direct' задають шлях жорстко.
+ * WHY NOT PLAIN fetch: the UXP permission `network.domains` does not bypass a
+ * system firewall — the request leaves the Photoshop process, and a "Block Photoshop"
+ * rule cuts it (measured: a socket from the PS process fails, while a child curl
+ * gets 401/403 in the same seconds). So in 'auto' mode the first network failure
+ * switches later requests to the curl transport, and 'curl'/'direct' pin the path.
  */
 async function netFetch(url, init, streaming) {
     const viaCurl = () => (streaming ? transport.fetchLikeStream(url, init)
                                      : transport.fetchLike(url, init));
-    // ⚠️ Перший запит сесії в 'auto' вирішуємо preflight'ом, а НЕ таймаутом самого
-    // запиту: заблокований потік висить, і з timeoutMs 300 с користувач дивився б
-    // на «Generating…» п'ять хвилин, перш ніж транспорт узагалі спробував би curl.
+    // The first request of a session in 'auto' is decided by a preflight, NOT by
+    // the request's own timeout: a blocked stream hangs, and with timeoutMs of 300 s
+    // the user would stare at "Generating…" for five minutes before the transport
+    // even tried curl.
     if (transport.getMode() === 'auto' && !transport.isRouteDecided()) {
         try { await transport.decideRoute(new URL(url).origin); } catch (e) {}
     }
@@ -41,18 +42,18 @@ async function netFetch(url, init, streaming) {
         transport.noteDirectFailure();
         const cap = await transport.probe();
         if (!cap.ok) {
-            // маршруту немає — не лишаємо 'auto' у стані «перемкнено на curl»,
-            // інакше кожен наступний запит ішов би в неробочий транспорт
+            // no route — do not leave 'auto' in the "switched to curl" state,
+            // or every later request would go to a transport that does not work
             transport.resetDirectFailure();
-            console.log(`[http] curl-транспорт недоступний: ${cap.reason}`);
+            console.log(`[http] curl transport unavailable: ${cap.reason}`);
             throw e;
         }
-        console.log('[http] прямий fetch не дійшов — переходжу на curl-транспорт');
+        console.log('[http] direct fetch did not get through — switching to the curl transport');
         return viaCurl();
     }
 }
 
-/** UTF-8 без TextEncoder — в UXP його немає. */
+/** UTF-8 without TextEncoder — UXP does not have it. */
 function strToBytes(str) {
     const bytes = [];
     for (let i = 0; i < str.length; i++) {
@@ -73,7 +74,7 @@ function strToBytes(str) {
     return new Uint8Array(bytes);
 }
 
-/** Blob → base64 без FileReader (в UXP він неповний). */
+/** Blob → base64 without FileReader (it is incomplete in UXP). */
 async function blobToBase64(blob) {
     const bytes = new Uint8Array(await blob.arrayBuffer());
     let binary = '';
@@ -85,8 +86,8 @@ async function blobToBase64(blob) {
 }
 
 /**
- * multipart/form-data вручну: FormData + Blob зависає в UXP, тому збираємо
- * тіло байтами самі. Це не самодурство старого коду, це необхідність.
+ * multipart/form-data by hand: FormData + Blob hangs in UXP, so we assemble
+ * the body as bytes ourselves. This is not a quirk of the old code; it is necessary.
  */
 async function buildMultipart(fields) {
     const boundary = 'AiImageBoundary' + Date.now().toString(36) +
@@ -126,18 +127,18 @@ class HttpError extends Error {
     }
 }
 
-/** Статуси, які варто повторити. 429 — ОБОВ'ЯЗКОВО (саме він і був пропущений). */
+/** Statuses worth retrying. 429 is REQUIRED (that is the one that used to be skipped). */
 const RETRYABLE = s => s === 429 || s === 408 || s === 409 || (s >= 500 && s < 600);
 
-/** Скасування користувачем — окремий тип, щоб withRetry його НЕ повторював. */
+/** User cancellation — its own type, so withRetry does NOT retry it. */
 class Cancelled extends Error {
     constructor() { super(httpI18n.t('provider.cancelled')); this.name = 'Cancelled'; this.cancelled = true; }
 }
 
 /**
- * Зводить зовнішній сигнал скасування й внутрішній таймаут в один контролер.
- * Повертає { signal, done() } — done() обов'язково викликати у finally, інакше
- * слухач на зовнішньому сигналі протече між генераціями.
+ * Folds an external cancel signal and the internal timeout into one controller.
+ * Returns { signal, done() } — done() must be called in finally, or the listener
+ * on the external signal leaks between generations.
  */
 function linkAbort(external, timeoutMs) {
     const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
@@ -160,9 +161,9 @@ function linkAbort(external, timeoutMs) {
 }
 
 /**
- * fetch із реальним скасуванням і читабельними помилками.
- * timeoutMs великий свідомо: генерація зображення на high може йти хвилини.
- * signal — зовнішній AbortSignal кнопки «Скасувати».
+ * fetch with a real cancellation and readable errors.
+ * timeoutMs is deliberately large: image generation at high can take minutes.
+ * signal is the external AbortSignal of the Cancel button.
  */
 async function request(url, { method = 'GET', headers = {}, body, timeoutMs = 300000, signal } = {}) {
     const link = linkAbort(signal, timeoutMs);
@@ -201,9 +202,9 @@ function errorFromBody(res, text) {
     try {
         const j = JSON.parse(text);
         msg = j?.error?.message || j?.error?.status || j?.message || msg;
-        // ⚠️ Сам код помилки, а не лише текст: статус 404 однаково стоїть і на
-        // «немає такої моделі», і на «немає такого ендпоінта», а розрізняти їх
-        // за англійським реченням — крихко. Провайдери реагують саме на code.
+        // The error code itself, not only the text: status 404 covers both
+        // "no such model" and "no such endpoint", and telling them apart from
+        // an English sentence is fragile. Providers react to the code.
         code = j?.error?.code || j?.error?.type || null;
     } catch (e) {
         if (text) msg += `: ${text.slice(0, 300)}`;
@@ -214,7 +215,7 @@ function errorFromBody(res, text) {
     return err;
 }
 
-/** Retry-After буває секундами або HTTP-датою; обидві форми стандартні. */
+/** Retry-After may be seconds or an HTTP date; both forms are standard. */
 function parseRetryAfter(value, now = Date.now()) {
     if (value === null || value === undefined || value === '') return null;
     const seconds = Number(value);
@@ -224,17 +225,17 @@ function parseRetryAfter(value, now = Date.now()) {
 }
 
 /**
- * SSE-запит для провайдерів, що вміють віддавати проміжні кадри.
+ * SSE request for providers that can return intermediate frames.
  *
- * ⚠️ ЧЕСНО ПРО ОБМЕЖЕННЯ: чи підтримує fetch в UXP потокове ЧИТАННЯ тіла
- * (`res.body.getReader`) — не задокументовано, і перевірити це з ExtendScript
- * неможливо (там немає fetch). Тому робимо перевірку можливості в рантаймі:
- * якщо reader є — читаємо подіями, якщо ні — дочитуємо весь текст і віддаємо
- * ті самі події одним пакетом. Прев'ю тоді просто не буде проміжним, але
- * генерація не зламається. Який шлях спрацював — видно в консолі.
+ * HONESTLY ABOUT THE LIMIT: whether fetch in UXP supports streaming READS of
+ * the body (`res.body.getReader`) is undocumented, and it cannot be checked
+ * from ExtendScript (there is no fetch there). So we probe the capability at
+ * runtime: if a reader exists, we read event by event; if not, we read the
+ * whole text and emit the same events in one batch. The preview is then not
+ * intermediate, but generation does not break. Which path ran is visible in the console.
  *
- * @param {(ev:object)=>void} onEvent — виклик на кожну розібрану SSE-подію
- * @returns {Promise<object|null>} остання подія (…completed), якщо була
+ * @param {(ev:object)=>void} onEvent — called for every parsed SSE event
+ * @returns {Promise<object|null>} the last event (…completed), if there was one
  */
 async function requestStream(url, { method = 'POST', headers = {}, body, timeoutMs = 300000, signal } = {}, onEvent) {
     const link = linkAbort(signal, timeoutMs);
@@ -265,17 +266,17 @@ async function requestStream(url, { method = 'POST', headers = {}, body, timeout
             for (;;) {
                 const { done, value } = await reader.read();
                 if (done) break;
-                // SSE дозволяє і LF, і CRLF. Нормалізуємо одразу, інакше
-                // `\r\n\r\n` не знаходиться як `\n\n`, а кадри накопичуються
-                // до завершення запиту й перестають бути живим preview.
+                // SSE allows both LF and CRLF. Normalize immediately, otherwise
+                // `\r\n\r\n` is not found as `\n\n`, frames pile up until the
+                // request ends, and they stop being a live preview.
                 buf += bytesToStr(value).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
-                // подія завершується порожнім рядком; тримаємо хвіст у буфері
+                // an event ends with a blank line; keep the tail in the buffer
                 const cut = buf.lastIndexOf('\n\n');
                 if (cut >= 0) { feed(buf.slice(0, cut + 2)); buf = buf.slice(cut + 2); }
             }
             if (buf.trim()) feed(buf);
         } else {
-            console.log('[http] потокове читання недоступне — розбираю SSE одним пакетом');
+            console.log('[http] streaming read unavailable — parsing SSE as one batch');
             feed(await res.text());
         }
         return last;
@@ -284,7 +285,7 @@ async function requestStream(url, { method = 'POST', headers = {}, body, timeout
     }
 }
 
-/** UTF-8 з байтів без TextDecoder (в UXP його теж може не бути). */
+/** UTF-8 from bytes without TextDecoder (UXP may not have it either). */
 function bytesToStr(bytes) {
     if (!bytes) return '';
     if (typeof bytes === 'string') return bytes;
@@ -294,11 +295,11 @@ function bytesToStr(bytes) {
     for (let i = 0; i < arr.length; i += CHUNK) {
         s += String.fromCharCode.apply(null, arr.subarray(i, Math.min(i + CHUNK, arr.length)));
     }
-    // base64 у SSE — ASCII, тому декодування UTF-8 тут не потрібне
+    // base64 in SSE is ASCII, so UTF-8 decoding is not needed here
     return s;
 }
 
-/** Розбирає блок SSE у масив об'єктів із рядків `data:`. */
+/** Parses an SSE block into an array of objects from `data:` lines. */
 function parseSse(chunk) {
     const out = [];
     const normalized = String(chunk).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -310,14 +311,14 @@ function parseSse(chunk) {
         if (!dataLines.length) continue;
         const payload = dataLines.join('');
         if (payload === '[DONE]') continue;
-        try { out.push(JSON.parse(payload)); } catch (e) { /* неповний кадр — пропускаємо */ }
+        try { out.push(JSON.parse(payload)); } catch (e) { /* incomplete frame — skip */ }
     }
     return out;
 }
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-/** Очікування ретраю, яке переривається кнопкою «Скасувати» одразу. */
+/** A retry wait that the Cancel button interrupts immediately. */
 function sleepWithSignal(ms, signal) {
     if (!signal) return sleep(ms);
     if (signal.aborted) return Promise.reject(new Cancelled());
@@ -335,7 +336,7 @@ function sleepWithSignal(ms, signal) {
     });
 }
 
-/** Ретрай лише того, що варто ретраїти, з повагою до Retry-After. */
+/** Retry only what is worth retrying, respecting Retry-After. */
 async function withRetry(fn, { tries = 4, baseDelay = 1200, signal } = {}) {
     let last;
     for (let attempt = 0; attempt < tries; attempt++) {
@@ -343,14 +344,14 @@ async function withRetry(fn, { tries = 4, baseDelay = 1200, signal } = {}) {
             return await fn();
         } catch (e) {
             last = e;
-            // Скасування користувачем — не помилка мережі, повторювати НЕ можна:
-            // інакше кнопка «Скасувати» лише подовжувала б очікування вчетверо.
+            // User cancellation is not a network error and must NOT be retried:
+            // otherwise the Cancel button would only stretch the wait fourfold.
             if (e && e.cancelled) throw e;
             const status = e && e.status;
             if (!RETRYABLE(status) || attempt === tries - 1) throw e;
             const wait = (Number.isFinite(e.retryAfter) ? e.retryAfter * 1000 : baseDelay * Math.pow(2, attempt))
                        + Math.floor(Math.random() * 300);
-            console.log(`[http] ${status} — повтор ${attempt + 1}/${tries - 1} через ${wait} мс`);
+            console.log(`[http] ${status} — retry ${attempt + 1}/${tries - 1} in ${wait} ms`);
             await sleepWithSignal(wait, signal);
         }
     }

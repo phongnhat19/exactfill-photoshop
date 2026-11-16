@@ -148,7 +148,7 @@ function shippedPipeline(spec, png, nat, rawBounds) {
 
         /* step 4 */
         try { executeAction(sID("placedLayerResetTransforms"), undefined, DialogModes.NO); }
-        catch (e) { out.warnings.push("placedLayerResetTransforms недоступний"); }
+        catch (e) { out.warnings.push("placedLayerResetTransforms unavailable"); }
 
         /* step 5 */
         function measure() {
@@ -158,13 +158,13 @@ function shippedPipeline(spec, png, nat, rawBounds) {
                 var sane = w > 0.005 && h > 0.005 &&
                     f.left > -3 * doc.width.as("px") && f.right < 4 * doc.width.as("px") &&
                     f.top > -3 * doc.height.as("px") && f.bottom < 4 * doc.height.as("px");
-                if (!sane) { out.warnings.push("transform неправдоподібний"); f = null; }
+                if (!sane) { out.warnings.push("transform implausible"); f = null; }
             }
             if (!f) {
                 var b = app.activeDocument.activeLayer.bounds;
                 f = { left: b[0].as("px"), top: b[1].as("px"),
                       right: b[2].as("px"), bottom: b[3].as("px"), size: null, skewed: false };
-                out.warnings.push("резерв на layer.bounds");
+                out.warnings.push("falling back to layer.bounds");
             }
             return f;
         }
@@ -185,7 +185,7 @@ function shippedPipeline(spec, png, nat, rawBounds) {
         for (var pass = 0; pass < 2 && !hit(cur); pass++) {
             passes++;
             var cw = cur.right - cur.left, ch = cur.bottom - cur.top;
-            if (cw < 0.005 || ch < 0.005) { out.warnings.push("рамка виродилась"); break; }
+            if (cw < 0.005 || ch < 0.005) { out.warnings.push("frame degenerated"); break; }
             var pw = tw / cw * 100, ph = th / ch * 100;
             if (Math.abs(pw - 100) > 1e-9 || Math.abs(ph - 100) > 1e-9) {
                 scaleSo(pw, ph);
@@ -199,7 +199,7 @@ function shippedPipeline(spec, png, nat, rawBounds) {
         out.passes = passes;
         out.residual = { dx: dst.left - cur.left, dy: dst.top - cur.top,
                          dw: tw - (cur.right - cur.left), dh: th - (cur.bottom - cur.top) };
-        if (cur.skewed) out.warnings.push("неафінний трансформ");
+        if (cur.skewed) out.warnings.push("non-affine transform");
         out.natKept = cur.size ? (Math.abs(cur.size.w - nat.w) < 0.5 &&
                                   Math.abs(cur.size.h - nat.h) < 0.5) : null;
         out.ok = Math.abs(out.residual.dx) < 0.01 && Math.abs(out.residual.dy) < 0.01 &&
@@ -210,6 +210,9 @@ function shippedPipeline(spec, png, nat, rawBounds) {
         for (var i = 0; i < app.activeDocument.historyStates.length; i++) {
             hs.push(app.activeDocument.historyStates[i].name);
         }
+        // Host history names stay in the regex: English "convert", Russian
+        // "преобразовать", Ukrainian "перевести". The probe must still recognize
+        // a localized Photoshop that recorded a conversion.
         out.converted = /convert|преобраз|перевести/i.test(hs.join(" | "));
         return out;
     } catch (e) { out.err = e.message + (e.line ? (" line " + e.line) : ""); return out; }

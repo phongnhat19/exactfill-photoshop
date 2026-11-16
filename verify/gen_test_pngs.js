@@ -1,4 +1,4 @@
-/* Генерує тестові PNG НАШИМ png.js — заодно перевірка deflate проти декодера Photoshop. */
+/* Generates test PNGs with OUR png.js — also a deflate check against Photoshop's decoder. */
 const fs = require('fs');
 const path = require('path');
 const { encodePng, setPngResolution, buildRectMaskPng, readPngSize } = require('../png.js');
@@ -6,7 +6,7 @@ const { encodePng, setPngResolution, buildRectMaskPng, readPngSize } = require('
 const OUT = process.argv[2] || '.';
 fs.mkdirSync(OUT, { recursive: true });
 
-/** Контрастна рамка 50 px — ловить обрізання канвою на око й у пікселях. */
+/** A contrasting 50 px frame — catches canvas clipping by eye and in pixels. */
 function makeRgb(w, h) {
     const px = new Uint8Array(w * h * 3);
     for (let y = 0; y < h; y++) {
@@ -35,11 +35,11 @@ emit('vt_1024_nophys.png', base1024);
 emit('vt_1024_p300.png', setPngResolution(base1024, 300));
 emit('vt_1024_p72.png', setPngResolution(base1024, 72));
 
-// непропорційний — для перевірки cover-режиму геометрії
+// non-proportional — for checking the cover mode of the geometry
 const base1000x600 = encodePng(makeRgb(1000, 600), 1000, 600, 3);
 emit('vt_1000x600_p300.png', setPngResolution(base1000x600, 300));
 
-// маска Grey+Alpha (colorType 4) — чи читає Photoshop наш deflate у цьому форматі
+// Grey+Alpha mask (colorType 4) — whether Photoshop reads our deflate in this format
 emit('vt_mask_1024.png', buildRectMaskPng(1024, 1024, { left: 200, top: 150, right: 800, bottom: 650 }));
 
 console.log(report.join('\n'));

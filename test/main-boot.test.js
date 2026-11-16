@@ -1,10 +1,9 @@
 /* ============================================================================
- *  test/main-boot.test.js — ІНІЦІАЛІЗАЦІЯ ПАНЕЛІ, ЗАПУЩЕНА НАСПРАВДІ.
+ *  test/main-boot.test.js — PANEL INITIALIZATION, ACTUALLY RUN.
  *
- *  ⚠️ Досі main.js (1271 рядок) жоден тест не завантажував — його читали як
- *  текст. Помилку в шляху запуску міг показати лише Photoshop, відкритий
- *  руками. Цей файл проходить увесь initUI на заглушках і дивиться, що
- *  опинилось у DOM.
+ *  Until now no test loaded main.js (1271 lines) — it was read as text. A bug
+ *  on the startup path could be shown only by Photoshop, opened by hand. This
+ *  file walks the whole initUI on stubs and looks at what ended up in the DOM.
  * ========================================================================== */
 
 const assert = require('node:assert/strict');
@@ -20,49 +19,49 @@ console.error = (...a) => { errors.push(a.map(String).join(' ')); realError(...a
 
 require('../main.js');
 
-// DOMContentLoaded запускає initUI; він асинхронний, тому даємо циклу подій дійти
+// DOMContentLoaded starts initUI; it is async, so let the event loop catch up
 const booted = (async () => {
     doc.fire('DOMContentLoaded');
     for (let i = 0; i < 20; i++) await new Promise(r => setTimeout(r, 5));
 })();
 
-test('ініціалізація проходить без жодного винятку, навіть коли ключа API ще нема', async () => {
+test('initialization passes with no exception, even when there is no API key yet', async () => {
     await booted;
-    // initUI ловить кожен блок окремо і пише в console.error — тобто мовчазний
-    // console.error тут і є «ініціалізація пройшла»
-    assert.deepEqual(errors, [], 'жоден блок initUI не має падати на чистому старті');
+    // initUI catches each block separately and writes to console.error — so a
+    // silent console.error here is "initialization passed"
+    assert.deepEqual(errors, [], 'no initUI block should fail on a clean start');
 });
 
-test('перелік провайдерів і моделей справді доїжджає до DOM', async () => {
+test('the provider and model lists really reach the DOM', async () => {
     await booted;
     const provider = doc.getElementById('provider-select');
-    assert.ok(provider, 'picker провайдерів мусить існувати після підміни');
+    assert.ok(provider, 'the provider picker must exist after the substitution');
     assert.ok(provider.querySelectorAll('sp-menu-item').length > 0,
-        'picker провайдерів не має лишатись порожнім');
+        'the provider picker must not stay empty');
 
     const model = doc.getElementById('model-select');
     const ids = model.querySelectorAll('sp-menu-item').map(c => c.getAttribute('value'));
-    // ⚠️ Саме заради цього два await у refreshModels розділені: без ключа API
-    // перелік мусить приїхати з вбудованого, а не лишити picker порожнім.
+    // This is why the two awaits in refreshModels are separate: without an API
+    // key the list must arrive from the built-in one, not leave the picker empty.
     assert.ok(ids.includes('gpt-image-2.5-sunburst'),
-        `нова модель мусить бути в переліку, а там: ${ids.join(', ')}`);
-    assert.ok(ids.includes(store.get('ai_model')), 'збережена модель мусить бути серед пунктів');
+        `the new model must be in the list, and there we have: ${ids.join(', ')}`);
+    assert.ok(ids.includes(store.get('ai_model')), 'the saved model must be among the items');
 });
 
-test('рівні якості йдуть за можливостями моделі, а не за назвою', async () => {
+test('quality levels follow the model capabilities, not the name', async () => {
     await booted;
     const seg = doc.getElementById('quality-toggle');
     const levels = () => seg.querySelectorAll('.seg-btn').map(b => b.dataset.value);
 
-    // gpt-image-2.5 вибрана першою: у неї є розширені рівні
+    // gpt-image-2.5 is selected first: it has the extended levels
     assert.deepEqual(levels(), ['low', 'medium', 'high', 'xhigh', 'max', 'auto'],
-        'у 2.5 мусять бути xhigh і max');
+        '2.5 must have xhigh and max');
     assert.ok(seg.classList.contains('seg-wrap'),
-        'шість кнопок в один ряд у 230-піксельній панелі не влазять — має бути два ряди');
+        'six buttons in one row do not fit a 230-pixel panel — there must be two rows');
 
-    // ⚠️ ГОЛОВНЕ: перемикання на стару модель мусить ПРИБРАТИ рівні, яких вона
-    // не знає. Інакше запит із quality=max пішов би в gpt-image-2 і повернув 400.
-    // (Модель — та, що не вимикається: тест не має старіти разом із каталогом.)
+    // THE POINT: switching to an older model must REMOVE levels it does not
+    // know. Otherwise a request with quality=max would go to gpt-image-2 and return 400.
+    // (The model is one that does not shut down: the test must not age with the catalog.)
     const model = doc.getElementById('model-select');
     seg.querySelectorAll('.seg-btn').find(b => b.dataset.value === 'max').fire('click');
     assert.equal(store.get('ai_quality'), 'max');
@@ -70,67 +69,67 @@ test('рівні якості йдуть за можливостями моде�
     model.value = 'gpt-image-2';
     model.fire('change', { target: { value: 'gpt-image-2' } });
     assert.deepEqual(levels(), ['low', 'medium', 'high', 'auto'],
-        'у gpt-image-2 розширених рівнів немає — кнопки мусять зникнути');
+        'gpt-image-2 has no extended levels — the buttons must disappear');
     const active = seg.querySelectorAll('.seg-btn').filter(b => b.classList.contains('active'));
-    assert.equal(active.length, 1, 'рівно один рівень активний');
+    assert.equal(active.length, 1, 'exactly one level is active');
     assert.equal(active[0].dataset.value, 'high',
-        'збережений max мусить опуститись до high — і НІКОЛИ не піднятись угору, бо це чужі гроші');
+        'a saved max must drop to high — and NEVER rise, because that is someone else\'s money');
 });
 
-test('вбудований пресет з\'являється на першому ж старті', async () => {
+test('the built-in preset appears on the very first start', async () => {
     await booted;
     const list = doc.getElementById('preset-list');
-    assert.ok(list, 'секція пресетів мусить існувати');
+    assert.ok(list, 'the presets section must exist');
     assert.ok(list.children.length > 0,
-        'без presetManager.load() тут було порожньо — саме цей баг тест і стереже');
+        'without presetManager.load() this was empty — that is the bug this test guards');
 });
 
-test('лічильник символів промпта зʼявляється лише коли текст справді довгий', async () => {
+test('the prompt character counter appears only when the text is actually long', async () => {
     await booted;
     const input = doc.getElementById('prompt-input');
     const counter = doc.getElementById('prompt-count');
     assert.ok(input && counter);
     const limit = Number(input.getAttribute('maxlength'));
-    assert.ok(limit >= 1000, 'поле мусить оголошувати великий maxlength — інакше UXP глушить його на ~256');
+    assert.ok(limit >= 1000, 'the field must declare a large maxlength — otherwise UXP silences it at ~256');
 
-    input.value = 'коротко';
+    input.value = 'short';
     input.fire('input');
-    assert.ok(counter.classList.contains('hidden'), 'на короткому тексті лічильник не потрібен');
+    assert.ok(counter.classList.contains('hidden'), 'on short text the counter is not needed');
 
-    input.value = 'я'.repeat(Math.round(limit * 0.95));
+    input.value = 'a'.repeat(Math.round(limit * 0.95));
     input.fire('input');
-    assert.ok(!counter.classList.contains('hidden'), 'на довгому тексті лічильник мусить показатись');
-    assert.ok(counter.classList.contains('near'), 'близько до межі — інший колір');
+    assert.ok(!counter.classList.contains('hidden'), 'on long text the counter must show');
+    assert.ok(counter.classList.contains('near'), 'near the limit — a different color');
     assert.match(counter.textContent, new RegExp(`/ ${limit}$`));
 });
 
-test('зміна ключа перезапитує перелік моделей', async () => {
+test('a key change re-requests the model list', async () => {
     await booted;
-    /* ⚠️ Доступність моделей залежить від ключа (openai.models питає
-       /v1/models). Без цієї проводки щойно введений ключ починав фільтрувати
-       пікер лише після перевідкриття панелі: користувач бачив моделі, яких у
-       нього нема, і діставав 404 замість пояснення. Гейт статичний, бо подію
-       кидає auth.js, а слухає main.js — саме стик між ними й губився. */
+    /* Model availability depends on the key (openai.models asks /v1/models).
+       Without this wiring a freshly entered key started filtering the picker
+       only after the panel was reopened: the user saw models they do not have
+       and got a 404 instead of an explanation. The gate is static, because
+       auth.js dispatches the event and main.js listens — that is the joint that was lost. */
     const fs = require('node:fs');
     const path = require('node:path');
     const root = path.join(__dirname, '..');
     assert.match(fs.readFileSync(path.join(root, 'auth.js'), 'utf8'),
         /dispatchEvent\(new Event\('exactfill:keychange'\)\)/,
-        'auth.js мусить повідомляти про новий ключ');
+        'auth.js must report a new key');
     assert.match(fs.readFileSync(path.join(root, 'main.js'), 'utf8'),
         /addEventListener\('exactfill:keychange'[\s\S]{0,400}refreshModels\(\)/,
-        'main.js мусить на цю подію перезапитати моделі');
-    /* ⚠️ Для OpenAI перелік від ключа НЕ залежить (див. models.test.js — каталог
-       не є джерелом правди про доступ). Проводка лишається заради Google, де
-       ListModels справді віддає те, що дозволено саме цьому ключу. */
+        'main.js must re-request models on this event');
+    /* For OpenAI the list does NOT depend on the key (see models.test.js — the
+       catalog is not the source of truth about access). The wiring stays for
+       Google, where ListModels really returns what this key is allowed. */
 });
 
-/* ── Картка плану: обіцянка мусить збігатись із запитом ────────────────────── */
+/* ── Plan card: the promise must match the request ────────────────────────── */
 
-/** Дає циклу подій добігти: обробники `change` не чекають refreshPlanLine. */
+/** Lets the event loop catch up: `change` handlers do not wait for refreshPlanLine. */
 const settle = async () => { for (let i = 0; i < 10; i++) await new Promise(r => setTimeout(r, 2)); };
 
-/** Виділення 1011×423 на канві 1920×1280 — та сама область, що й у живому прогоні. */
+/** A 1011×423 selection on a 1920×1280 canvas — the same area as in the live run. */
 function withSelection(pad, extra = {}) {
     env.photoshop.app.activeDocument = {
         width: 1920, height: 1280,
@@ -145,110 +144,110 @@ function withSelection(pad, extra = {}) {
 
 const planLine = () => doc.getElementById('plan-line').textContent;
 
-test('картка плану називає ТОЙ САМИЙ формат входу, який справді полетить', async () => {
+test('the plan card names THE SAME input format that will actually be sent', async () => {
     await booted;
-    /* ⚠️ ЦЕ БУВ ЖИВИЙ БАГ, зловлений у Photoshop 2026-09-09. Рішення про формат
-       жило двічі: capturePayload змушував PNG заради маски, а картка дивилась
-       лише на галку «вхід без втрат». Користувач читав «вхід JPEG · 58 КБ», а
-       летіло 1227 КБ PNG — двадцятикратна різниця саме там, де вона дорога. */
+    /* THIS WAS A LIVE BUG, caught in Photoshop 2026-09-09. The format decision
+       lived twice: capturePayload forced PNG for the mask, and the card looked
+       only at the "lossless input" checkbox. The user read "input JPEG · 58 KB",
+       and 1227 KB of PNG was sent — a twenty-fold difference exactly where it is expensive. */
     doc.getElementById('lossless-input').checked = false;
 
     await withSelection(0);
-    assert.match(planLine(), /вхід JPEG/, 'без контексту маски нема — JPEG');
-    assert.doesNotMatch(planLine(), /з маскою/);
+    assert.match(planLine(), /input JPEG/, 'with no context there is no mask — JPEG');
+    assert.doesNotMatch(planLine(), /with mask/);
 
     await withSelection(15);
-    assert.match(planLine(), /вхід PNG/,
-        'контекст > 0 вмикає маску, а маска зобов\'язує PNG — картка мусить це сказати');
-    assert.match(planLine(), /з маскою/,
-        'маска змінює поведінку моделі з «редагуй» на «перемалюй» — це не дрібниця для картки');
+    assert.match(planLine(), /input PNG/,
+        'context > 0 turns the mask on, and a mask requires PNG — the card must say so');
+    assert.match(planLine(), /with mask/,
+        'a mask changes the model from "edit" to "repaint" — that is not a detail for the card');
 });
 
-test('картка плану не обіцяє вхідного зображення, коли пікселі ігноруються', async () => {
+test('the plan card does not promise an input image when pixels are ignored', async () => {
     await booted;
     doc.getElementById('lossless-input').checked = false;
     doc.getElementById('ignore-pixels').checked = true;
     await withSelection(15);
-    assert.match(planLine(), /без вхідного зображення/);
-    assert.doesNotMatch(planLine(), /з маскою/, 'без пікселів маску нема до чого чіпляти');
+    assert.match(planLine(), /no input image/);
+    assert.doesNotMatch(planLine(), /with mask/, 'without pixels there is nothing for a mask to attach to');
     doc.getElementById('ignore-pixels').checked = false;
 });
 
-test('«Перегенерувати» бере відступ контексту поточний, а не збережений', () => {
-    /* ⚠️ Гейт статичний: гілка reuse спрацьовує лише після справжнього запиту,
-       якого стенд не робить. Але сама помилка текстова — resolveRegion приймав
-       padPercent і в цій гілці його не читав, повертаючи lastRun.ctx. Зміна
-       повзунка перед «Перегенерувати» мовчки не діяла: той самий кадр і та сама
-       ціна без жодного натяку в інтерфейсі. */
+test('Regenerate takes the current context pad, not the saved one', () => {
+    /* The gate is static: the reuse branch runs only after a real request,
+       which the stand does not make. But the bug itself is textual — resolveRegion
+       accepted padPercent and did not read it in this branch, returning lastRun.ctx.
+       Moving the slider before Regenerate silently did nothing: the same frame and
+       the same price with no hint in the interface. */
     const fs = require('node:fs');
     const path = require('node:path');
     const src = fs.readFileSync(path.join(__dirname, '..', 'main.js'), 'utf8');
     const branch = src.slice(src.indexOf('async function resolveRegion'),
-                             src.indexOf('/** Захоплення пікселів'));
+                             src.indexOf('/** Capture pixels'));
     assert.match(branch, /return \{ target: lastRun\.target, ctx: expandForContext\(lastRun\.target, doc, padPercent\) \}/,
-        'reuse мусить перерахувати контекст із поточного padPercent');
+        'reuse must recompute the context from the current padPercent');
     assert.doesNotMatch(branch, /ctx: lastRun\.ctx/,
-        'збережений ctx у гілці reuse — це і є той самий баг');
+        'a saved ctx in the reuse branch is that same bug');
 });
 
-test('відступ контексту рахується по кожній осі окремо', async () => {
+test('the context pad is computed on each axis separately', async () => {
     await booted;
-    /* ⚠️ Раніше відступ брався від ДОВШОЇ сторони й додавався до всіх чотирьох
-       боків. На виділенні 1011×423 «15%» давало 152 px усюди: +30% ширини, але
-       +72% висоти, ще й асиметрично після зажиму об верх канви — виміряно в
-       хості 2026-09-09 як ctx 1315×611. Правильно: 1315×522. */
+    /* The pad used to be taken from the LONGER side and added to all four
+       sides. On a 1011×423 selection "15%" gave 152 px everywhere: +30% of the
+       width, but +72% of the height, and asymmetric after clamping to the top of
+       the canvas — measured on the host 2026-09-09 as ctx 1315×611. Correct: 1315×522. */
     doc.getElementById('lossless-input').checked = false;
     await withSelection(15);
-    assert.match(planLine(), /контекст 1315×522/,
-        `очікував padX=152, padY=63; отримав: ${planLine()}`);
+    assert.match(planLine(), /context 1315×522/,
+        `expected padX=152, padY=63; got: ${planLine()}`);
 });
 
-test('картка плану називає ціну ще до натискання', async () => {
+test('the plan card names the price before the button is pressed', async () => {
     await booted;
-    /* Модель і рівень задаємо явно: попередні тести в цьому файлі перемикають
-       пікер, а прогноз залежить саме від пари (модель, якість). */
+    /* Model and level are set explicitly: earlier tests in this file switch
+       the picker, and the forecast depends on the pair (model, quality). */
     global.localStorage.setItem('ai_model', 'gpt-image-2.5-sunburst');
     global.localStorage.setItem('ai_quality', 'high');
     doc.getElementById('lossless-input').checked = false;
     await withSelection(0);
-    /* Прогноз для sunburst/high — медіана 3912 вихідних токенів із журналу,
-       тобто ≈$0.13. Точне число перевіряє usage.test.js; тут важливо, що воно
-       ВЗАГАЛІ доїжджає до картки: до цієї правки ціна була відома лише
-       постфактум, коли платити вже пізно. */
-    assert.match(planLine(), /≈\$0\.1\d/, `ціни в картці нема: ${planLine()}`);
-    assert.match(planLine(), /\(\$0\.\d+–\$0\.\d+\)/, 'вилка мусить бути видима — це оцінка, не тариф');
+    /* The forecast for sunburst/high is the median of 3912 output tokens from
+       the log, that is ≈$0.13. The exact number is checked by usage.test.js;
+       what matters here is that it reaches the card AT ALL: before this fix the
+       price was known only afterwards, when it is already too late to pay. */
+    assert.match(planLine(), /≈\$0\.1\d/, `there is no price on the card: ${planLine()}`);
+    assert.match(planLine(), /\(\$0\.\d+–\$0\.\d+\)/, 'the range must be visible — this is an estimate, not a tariff');
 });
 
-test('картка попереджає про жорсткий край, коли з маскою йде край 0', async () => {
+test('the card warns about a hard edge when a mask goes with edge 0', async () => {
     await booted;
     const feather = doc.getElementById('edge-feather');
     feather.value = '0';
     await withSelection(15);
-    assert.match(planLine(), /з маскою/);
-    assert.match(planLine(), /жорсткий край/, `попередження нема: ${planLine()}`);
+    assert.match(planLine(), /with mask/);
+    assert.match(planLine(), /hard edge/, `there is no warning: ${planLine()}`);
 
     feather.value = '16';
     await withSelection(15);
-    assert.doesNotMatch(planLine(), /жорсткий край/, 'з ненульовим краєм попередження зайве');
+    assert.doesNotMatch(planLine(), /hard edge/, 'with a non-zero edge the warning is unnecessary');
 });
 
-test('кнопка «Уточнити» існує і на чистому старті сіра', async () => {
+test('the Refine button exists and is grey on a clean start', async () => {
     await booted;
     const refine = doc.getElementById('refine-btn');
-    assert.ok(refine, 'кнопка мусить бути в розмітці, а не з’являтись після першого запуску');
-    /* ⚠️ Три умови вмикають її, і кожна вміє відмовити окремо: був запуск,
-       від нього щось лишилось, провайдер уміє маршрут. На чистому старті
-       не виконана перша — і саме це має бачити користувач, бо натиснута
-       кнопка без lastRun пішла б у мережу з порожнім посиланням. */
+    assert.ok(refine, 'the button must be in the markup, not appear after the first run');
+    /* Three conditions enable it, and each can refuse on its own: there was a
+       run, something remains from it, the provider can do the route. On a clean
+       start the first is not met — and that is what the user must see, because a
+       pressed button without lastRun would go to the network with an empty reference. */
     assert.equal(refine.disabled, true);
     assert.equal(refine.getAttribute('data-i18n'), 'action.refine');
 });
 
-test('поруч із «Уточнити» лишається «Перегенерувати» — це різні дії', async () => {
+test('Regenerate stays next to Refine — they are different actions', async () => {
     await booted;
-    // Одну кнопку легко переплутати з іншою, доки видно лише одну з них.
-    // «Перегенерувати» — той самий промпт по вихідних пікселях; «Уточнити» —
-    // новий текст по вже намальованому кадру. Обидві мусять бути на очах.
+    // One button is easy to confuse with the other while only one of them is visible.
+    // Regenerate is the same prompt against the original pixels; Refine is new
+    // text against the frame already painted. Both must be in sight.
     const regen = doc.getElementById('regen-btn');
     assert.ok(regen && regen.disabled === true);
     assert.notEqual(doc.getElementById('refine-btn'), regen);

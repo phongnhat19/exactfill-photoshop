@@ -1,17 +1,17 @@
 #!/bin/bash
-# Встановлює/оновлює плагін у Photoshop.
+# Installs or updates the plugin in Photoshop.
 #
-# Пароль потрібен ЛИШЕ на перше встановлення: /Applications/.../Plug-ins
-# належить root, тому створити там папку без sudo не можна. Далі скрипт робить
-# chown на вас, і всі наступні оновлення йдуть без пароля — тому спершу
-# пробуємо без sudo і звертаємось до нього тільки якщо запис не вдався.
+# A password is needed ONLY for the first install: /Applications/.../Plug-ins
+# is owned by root, so the folder cannot be created there without sudo. The
+# script then chowns it to you, and later updates need no password — so we try
+# without sudo first and call it only if the write fails.
 set -e
 
-# ⚠️ Назва папки мусить збігатися з тією, що вже стоїть у Photoshop. Тут довго
-# лишалось AiImagePS із часів, коли плагін так і звався: після перейменування
-# на ExactFill цей скрипт створював би ДРУГУ папку з тим самим manifest id
-# поруч із робочою, замість оновити її. Гейт — тест «deploy target matches
-# the installed plugin folder».
+# The folder name must match the one already installed in Photoshop. This stayed
+# AiImagePS for a long time, from when the plugin was called that: after the
+# rename to ExactFill this script would have created a SECOND folder with the
+# same manifest id next to the working one, instead of updating it. The gate is
+# the test "deploy target matches the installed plugin folder".
 DEST="/Applications/Adobe Photoshop 2026/Plug-ins/ExactFill"
 SRC="$(cd "$(dirname "$0")" && pwd)"
 EXCL=(--include 'icons/exactfill.svg' --include 'icons/panel-*.png' --exclude 'icons/*'
@@ -26,13 +26,13 @@ EXCL=(--include 'icons/exactfill.svg' --include 'icons/panel-*.png' --exclude 'i
 
 if [ -d "$DEST" ] && [ -w "$DEST" ]; then
     rsync -a --delete --delete-excluded "${EXCL[@]}" "$SRC/" "$DEST/"
-    echo "✓ Оновлено без пароля: $DEST"
+    echo "✓ Updated without a password: $DEST"
 else
-    echo "Перше встановлення — потрібен пароль (Plug-ins належить root)."
+    echo "First install — a password is required (Plug-ins is owned by root)."
     sudo rsync -a --delete --delete-excluded "${EXCL[@]}" "$SRC/" "$DEST/"
     sudo chown -R "$(id -un):staff" "$DEST"
-    echo "✓ Встановлено: $DEST"
-    echo "  Наступні оновлення пароля вже не потребують."
+    echo "✓ Installed: $DEST"
+    echo "  Later updates will not need a password."
 fi
 
-echo "  Перезапустіть Photoshop → Plugins → ExactFill"
+echo "  Restart Photoshop → Plugins → ExactFill"

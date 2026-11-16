@@ -3,80 +3,81 @@ const test = require('node:test');
 
 const { insetBlendRadius } = require('../geometry.js');
 
-// capture.js робить require('photoshop') на верхньому рівні, тому потрібні заглушки
+// capture.js requires('photoshop') at the top level, so stubs are needed
 require('./stubs/dom.js').install();
 const capture = require('../capture.js');
 
-test('ширина переходу ділиться між contract і feather', () => {
+test('the transition width is split between contract and feather', () => {
     const bounds = { left: 100, top: 100, right: 1124, bottom: 1124 };
     assert.equal(insetBlendRadius(bounds, 16), 8);
     assert.equal(insetBlendRadius(bounds, 256), 128);
 });
 
-test('мале виділення зберігає повністю непрозоре ядро', () => {
+test('a small selection keeps a fully opaque core', () => {
     const bounds = { left: 0, top: 0, right: 100, bottom: 40 };
     assert.equal(insetBlendRadius(bounds, 256), 9);
 });
 
-test('нульове або некоректне значення не змінює selection', () => {
+test('a zero or invalid value does not change the selection', () => {
     const bounds = { left: 0, top: 0, right: 100, bottom: 100 };
     assert.equal(insetBlendRadius(bounds, 0), 0);
-    assert.equal(insetBlendRadius(bounds, 'не число'), 0);
+    assert.equal(insetBlendRadius(bounds, 'not a number'), 0);
 });
 
 
-/* ── Інваріант «маска лише з PNG-входом» ───────────────────────────────────── */
+/* ── Invariant: a mask only with a PNG input ───────────────────────────────── */
 
 const CTX = { left: 0, top: 0, w: 512, h: 512 };
 const TARGET = { left: 128, top: 128, right: 384, bottom: 384 };
 
-test('маска не їде разом із JPEG-входом', () => {
-    /* ⚠️ OpenAI: «the source image and the mask must share the same format and
-       dimensions». Розбіжність сервер НЕ відхиляє — він мовчки ігнорує маску, і
-       модель перемальовує весь кадр. Симптом у користувача: «модель не бачить
-       виділення», причому запит виглядає успішним і гроші списано.
+test('a mask does not travel with a JPEG input', () => {
+    /* OpenAI: "the source image and the mask must share the same format and
+       dimensions". A mismatch is NOT rejected by the server — it silently ignores
+       the mask, and the model repaints the whole frame. The user's symptom:
+       "the model does not see the selection", while the request looks successful
+       and the money has been charged.
 
-       Раніше цей інваріант жив рядками всередині onGenerate, а гейтом був
-       регекс по тексту main.js. Тепер це функція, і перевіряється поведінка. */
+       This invariant used to live as lines inside onGenerate, and the gate was a
+       regex over the text of main.js. Now it is a function, and the behavior is checked. */
     const out = capture.maskForRequest({
         ctx: CTX, target: TARGET, feather: 16,
         input: new Blob([new Uint8Array(10)], { type: 'image/jpeg' }),
     });
-    assert.equal(out.blob, null, 'маски бути не повинно');
-    assert.match(out.reason, /PNG/, 'причина мусить бути named, інакше в логах порожньо');
+    assert.equal(out.blob, null, 'there must be no mask');
+    assert.match(out.reason, /PNG/, 'the reason must be named, otherwise the logs are empty');
 });
 
-test('маска будується для PNG-входу і має розмір контексту', () => {
+test('a mask is built for a PNG input and has the context size', () => {
     const out = capture.maskForRequest({
         ctx: CTX, target: TARGET, feather: 16,
         input: new Blob([new Uint8Array(10)], { type: 'image/png' }),
     });
-    assert.ok(out.blob, `маска мусить бути, а причина: ${out.reason}`);
-    assert.equal(out.reason, '', 'успішний шлях не пояснює себе');
-    assert.ok(out.bytes > 0 && out.bytes < 4 * 1024 * 1024, `розмір ${out.bytes} B поза лімітом OpenAI`);
+    assert.ok(out.blob, `there must be a mask, and the reason is: ${out.reason}`);
+    assert.equal(out.reason, '', 'the success path does not explain itself');
+    assert.ok(out.bytes > 0 && out.bytes < 4 * 1024 * 1024, `size ${out.bytes} B is outside the OpenAI limit`);
 });
 
-test('відсутній вхід і зламана геометрія не кидають виняток, а пояснюють', () => {
-    // ignorePixels: входу немає взагалі
+test('a missing input and broken geometry do not throw, they explain', () => {
+    // ignorePixels: there is no input at all
     const noInput = capture.maskForRequest({ ctx: CTX, target: TARGET, input: null });
     assert.equal(noInput.blob, null);
     assert.match(noInput.reason, /\S/);
 
-    // ціль поза контекстом — buildRectMaskPng кине, і це не має валити запуск
+    // a target outside the context — buildRectMaskPng will throw, and that must not crash the run
     const broken = capture.maskForRequest({
         ctx: CTX, target: { left: 900, top: 900, right: 800, bottom: 800 },
         input: new Blob([new Uint8Array(10)], { type: 'image/png' }),
     });
     assert.equal(broken.blob, null);
-    assert.match(broken.reason, /\S/, 'причину мусимо побачити в логу, а не втратити');
+    assert.match(broken.reason, /\S/, 'we must see the reason in the log, not lose it');
 });
 
 
-/* ── Маска запиту за формою виділення, а не за його рамкою ─────────────────── */
+/* ── The request mask follows the selection shape, not its frame ───────────── */
 
 const { buildShapeMaskPng, buildRectMaskPng } = require('../png.js');
 
-/** Коло радіуса r у кадрі w×h: 255 = «змінити тут». */
+/** A circle of radius r in a w×h frame: 255 = "change here". */
 function circle(w, h, r) {
     const sel = new Uint8Array(w * h);
     const cx = w / 2, cy = h / 2;
@@ -89,43 +90,44 @@ function circle(w, h, r) {
     return sel;
 }
 
-test('маска за формою менша за прямокутну — саме в цьому вся суть', () => {
-    /* ⚠️ Це не про байти, а про площу дозволу. До 2026-09-09 в API летів
-       bounding box: усе, що ділило його з ціллю, модель мала право стерти —
-       у хості так зникла голова людини, що потрапила в кут рамки. Коло
-       вписане в той самий квадрат займає π/4 ≈ 79% його площі; решта 21%
-       мусить лишитись моделі як КОНТЕКСТ. */
+test('a shape mask is smaller than a rectangular one — that is the whole point', () => {
+    /* This is not about bytes, it is about the area of permission. Until
+       2026-09-09 the API was sent the bounding box: everything that shared it
+       with the target, the model was allowed to erase — on the host that is how
+       a person's head that fell into a corner of the frame disappeared. A circle
+       inscribed in the same square takes π/4 ≈ 79% of its area; the other 21%
+       must stay with the model as CONTEXT. */
     const w = 200, h = 200, r = 100;
     const shaped = buildShapeMaskPng(w, h, circle(w, h, r), 0);
     const rect = buildRectMaskPng(w, h, { left: 0, top: 0, right: w, bottom: h }, 0);
     assert.ok(shaped.length > rect.length,
-        'суцільний прямокутник стискається краще за коло — якщо ні, форма не застосувалась');
+        'a solid rectangle compresses better than a circle — if not, the shape was not applied');
 });
 
-test('порожня форма не проходить: маска без прозорих пікселів поверне вхід без змін', () => {
+test('an empty shape does not pass: a mask with no transparent pixels would return the input unchanged', () => {
     assert.throws(() => buildShapeMaskPng(8, 8, new Uint8Array(64), 0));
     assert.throws(() => buildShapeMaskPng(8, 8, new Uint8Array(10), 0), /.*/,
-        'невідповідний розмір буфера теж мусить падати, а не мовчки різати');
+        'a mismatched buffer size must also fail, not silently clip');
 });
 
-test('край не має права з’їсти серцевину форми', () => {
-    // край 400 px на колі радіуса 40 — зажим мусить лишити повністю прозоре ядро
+test('the edge must not be allowed to eat the core of the shape', () => {
+    // a 400 px edge on a circle of radius 40 — the clamp must leave a fully transparent core
     const w = 120, h = 120;
     const png = buildShapeMaskPng(w, h, circle(w, h, 40), 400);
     assert.ok(png.length > 0);
     const same = buildShapeMaskPng(w, h, circle(w, h, 40), 64);
     assert.deepEqual(Array.from(png), Array.from(same),
-        'вище зажиму збільшення краю не має нічого змінювати');
+        'past the clamp, increasing the edge must change nothing');
 });
 
-test('maskForRequest бере форму, коли вона є, і каже про це джерелом', () => {
+test('maskForRequest takes the shape when there is one, and says so via the source', () => {
     const png = { input: new Blob([new Uint8Array(10)], { type: 'image/png' }) };
     const withShape = capture.maskForRequest({
         ctx: CTX, target: TARGET, feather: 0, shape: circle(CTX.w, CTX.h, 100), ...png,
     });
     assert.equal(withShape.source, 'selection');
-    assert.ok(withShape.blob, 'маска мусить побудуватись');
+    assert.ok(withShape.blob, 'the mask must be built');
 
     const withoutShape = capture.maskForRequest({ ctx: CTX, target: TARGET, feather: 0, ...png });
-    assert.equal(withoutShape.source, 'rectangle', 'без форми лишається стара поведінка');
+    assert.equal(withoutShape.source, 'rectangle', 'without a shape the old behavior remains');
 });

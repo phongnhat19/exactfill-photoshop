@@ -33,12 +33,12 @@
             <label id="prompt-label" for="prompt-input" class="field-title" data-i18n="prompt.label">What should change?</label>
             <span id="prompt-count" class="char-count hidden" aria-live="polite"></span>
         </div>
-        <!-- maxlength ОБОВ'ЯЗКОВИЙ, і не для того, щоб обмежити текст. Поле UXP
-             без явного maxlength мовчки перестає приймати введення приблизно на
-             256 символах: ні помилки, ні обрізаного хвоста — просто клавіатура
-             перестає діяти. Оголошене значення знімає цю невидиму стелю.
-             rows= в UXP не працює взагалі (офіційний перелік відомих проблем) —
-             висоту задає CSS. -->
+        <!-- maxlength is REQUIRED, and not in order to limit the text. A UXP
+             field without an explicit maxlength silently stops accepting input
+             at about 256 characters: no error, no truncated tail — the keyboard
+             simply stops working. Declaring a value removes that invisible ceiling.
+             rows= does nothing in UXP (official list of known issues) —
+             height comes from CSS. -->
         <textarea id="prompt-input" maxlength="10000"
                   placeholder="Describe the change in the selected area"
                   data-i18n-placeholder="prompt.placeholder"></textarea>
@@ -228,7 +228,7 @@
             <label for="language-select" class="lbl" data-i18n="language.label">Language</label>
             <select id="language-select" class="language-select">
                 <option value="en">English</option>
-                <option value="uk">Українська</option>
+                <option value="uk">English (alternate date format)</option>
             </select>
         </div>
         <p class="hint privacy-note" data-i18n="privacy.note">Keys stay in Photoshop secure storage.</p>

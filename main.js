@@ -1,14 +1,14 @@
 /* ============================================================================
- *  main.js — єдиний потік: виділення → промпт → провайдер → Smart Object.
+ *  main.js — the single flow: selection → prompt → provider → Smart Object.
  *
- *  Тут НЕМА геометрії (geometry.js), НЕМА роботи з пікселями (capture.js),
- *  НЕМА вставки (place.js) і НЕМА знання про провайдерів (providers/).
- *  Старий main.js мав 2797 рядків, з яких на цей сценарій працювало ~850.
+ *  There is NO geometry here (geometry.js), NO pixel work (capture.js),
+ *  NO insertion (place.js) and NO knowledge of providers (providers/).
+ *  The old main.js had 2797 lines, of which ~850 served this flow.
  *
- *  Варіацій тут свідомо немає. Вони вставляли N шарів один поверх одного з
- *  однаковою маскою: заплатив за чотири, а порівнювати доводилось кліканням
- *  видимості в палітрі шарів. Замість них — «Перегенерувати» (та сама область,
- *  без нового виділення) і кеш результатів (повторна вставка безкоштовна).
+ *  There are deliberately no variations here. They inserted N layers on top of
+ *  each other with the same mask: you paid for four and had to compare them by
+ *  clicking visibility in the Layers panel. Instead: Regenerate (the same area,
+ *  without a new selection) and a result cache (reinsertion is free).
  * ========================================================================== */
 
 const { app, core, action } = require('photoshop');
@@ -28,9 +28,9 @@ const dom            = require('./ui-dom.js');
 const mainI18n       = require('./i18n.js');
 const { mimeOfB64 } = require('./png.js');
 
-/* Ключі сховища й читання налаштувань живуть окремо: перший — щоб не було
-   пʼяти копій рядка 'ai_provider' по файлах, друге — щоб зведення якості до
-   можливостей моделі можна було перевірити в node, а не лише в Photoshop. */
+/* Storage keys and settings reads live separately: the first so there are not
+   five copies of the string 'ai_provider' across files, the second so coercing
+   quality to what the model can do can be tested in node, not only in Photoshop. */
 const { LEGACY } = require('./storage-keys.js');
 const {
     LS, num, checked,
@@ -45,15 +45,15 @@ let busy = false;
 let abortCtrl = null;
 let references = [];        // [{ name, blob }]
 let lastRun = null;         // { prompt, provider, model, ctx, target, ... }
-let modelRefreshSeq = 0;    // захист від перегонів при швидкій зміні провайдера
+let modelRefreshSeq = 0;    // guards against races when the provider changes quickly
 
-/* ── Виділення ─────────────────────────────────────────────────────────────── */
+/* ── Selection ─────────────────────────────────────────────────────────────── */
 
 /**
- * Межі виділення БЕЗ imaging.getSelection.
- * Причина: getSelection/getData() валить Photoshop у CMYK-документі, а нам
- * потрібні лише чотири числа. doc.selection.bounds їх і дає (PS 25.0+);
- * для старіших — той самий descriptor через batchPlay.
+ * Selection bounds WITHOUT imaging.getSelection.
+ * Reason: getSelection/getData() crashes Photoshop on a CMYK document, and we
+ * only need four numbers. doc.selection.bounds provides them (PS 25.0+);
+ * for older hosts, the same descriptor via batchPlay.
  */
 async function readSelectionBounds(doc) {
     try {
@@ -61,7 +61,7 @@ async function readSelectionBounds(doc) {
         if (sel && sel.bounds) {
             return { bounds: sel.bounds, solid: sel.solid !== false };
         }
-    } catch (e) { /* падаємо на batchPlay */ }
+    } catch (e) { /* fall through to batchPlay */ }
 
     const r = await batchPlay([{
         _obj: 'get',
@@ -73,18 +73,18 @@ async function readSelectionBounds(doc) {
     if (v(s.left) === undefined) return null;
     return {
         bounds: { left: v(s.left), top: v(s.top), right: v(s.right), bottom: v(s.bottom) },
-        solid: true,   // через batchPlay форму не визначити — вважаємо прямокутником
+        solid: true,   // batchPlay cannot tell the shape — treat it as a rectangle
     };
 }
 
-/** Розширює цільову область контекстом і зажимає канвою. */
+/** Expands the target area with context and clamps it to the canvas. */
 function expandForContext(target, doc, padPercent) {
     if (!padPercent) return { ...target };
-    /* ⚠️ Відсоток рахуємо ПО КОЖНІЙ ОСІ ОКРЕМО. Раніше тут був один відступ від
-       довшої сторони — і на смузі 1011×423 «15%» означало +30% ширини, але
-       +72% висоти, ще й асиметрично після зажиму об канву (виміряно 2026-09-09:
-       ctx 1315×611 замість очікуваних 1315×549). Користувач бачив у картці
-       вдвічі більший кадр, ніж просив, і платив за нього. */
+    /* The percent is computed ON EACH AXIS SEPARATELY. This used to be one pad
+       from the longer side — and on a 1011×423 strip "15%" meant +30% of the width
+       but +72% of the height, and asymmetric after clamping to the canvas (measured
+       2026-09-09: ctx 1315×611 instead of the expected 1315×549). The user saw a
+       frame twice as large as they asked for in the card, and paid for it. */
     const padX = Math.round(target.w * (padPercent / 100));
     const padY = Math.round(target.h * (padPercent / 100));
     const left   = Math.max(0, target.left - padX);
@@ -108,19 +108,19 @@ function setBusy(on) {
     busy = on;
     const btn = $('generate-btn');
     if (btn) {
-        btn.disabled = on;                 // захист від подвійного кліку — у старому його не було
+        btn.disabled = on;                 // double-click guard — the old code did not have one
         btn.setAttribute('aria-busy', on ? 'true' : 'false');
     }
     const regen = $('regen-btn');
     if (regen) regen.disabled = on || !lastRun;
     const refine = $('refine-btn');
-    // Уточнення потребує не лише минулого запуску, а й провайдера, який уміє
-    // розмову: у Gemini такого маршруту немає, і кнопка мусить це показувати.
+    // Refine needs not only a previous run but a provider that can hold a
+    // conversation: Gemini has no such route, and the button must show that.
     if (refine) {
         refine.disabled = on || !canRefine();
-        /* Хід розмови видно лише тут. Різниця між першим ходом (їдуть пікселі)
-           і продовженням (їде id) — це різна ціна й різна поведінка моделі,
-           тому вона мусить бути написана, а не вгадуватись. */
+        /* The conversation turn is visible only here. The difference between the
+           first turn (pixels go) and a continuation (an id goes) is a different
+           price and different model behavior, so it must be written, not guessed. */
         const turn = !canRefine() ? ''
             : lastRun.responseId
                 ? mainI18n.t('plan.refineTurn', { number: (lastRun.turn || 1) + 1 })
@@ -144,9 +144,9 @@ function showPreview(b64) {
 }
 
 /**
- * Бейдж-лічильник біля заголовка секції.
- * ⚠️ НЕ через CSS `.badge:empty` — UXP цей псевдоклас не підтримує, і порожній
- * бейдж малювався як синій кружечок біля кожної секції.
+ * A count badge next to a section heading.
+ * NOT via CSS `.badge:empty` — UXP does not support that pseudo-class, and an
+ * empty badge drew as a blue dot next to every section.
  */
 function setBadge(id, text) {
     const el = $(id);
@@ -156,13 +156,13 @@ function setBadge(id, text) {
 }
 
 /**
- * Лічильник символів промпта.
+ * Prompt character counter.
  *
- * ⚠️ НАВІЩО ВІН ВЗАГАЛІ: поле UXP без явного `maxlength` мовчки припиняє
- * приймати введення приблизно на 256 символах — ні помилки, ні обрізаного
- * хвоста. Ліміт у розмітці цю стелю знімає, а лічильник робить нову межу
- * видимою, щоб історія «текст просто перестав вводитись» не повторилась із
- * іншим числом. Порогом 60 % тримаємо панель чистою у звичайній роботі.
+ * WHY IT EXISTS AT ALL: a UXP field without an explicit `maxlength` silently
+ * stops accepting input at about 256 characters — no error, no truncated tail.
+ * The limit in the markup removes that ceiling, and the counter makes the new
+ * limit visible, so the story "the text simply stopped being typed" does not
+ * repeat with a different number. A 60% threshold keeps the panel clean in ordinary use.
  */
 function updateCharCount(inputId, counterId, showFrom = 0.6) {
     const el = $(inputId), out = $(counterId);
@@ -180,23 +180,23 @@ function updateCharCount(inputId, counterId, showFrom = 0.6) {
 }
 
 /**
- * Гарантує, що керування числом видно.
+ * Makes sure a numeric control is visible.
  *
- * ⚠️ ЧОМУ ЦЕ ПОТРІБНО: UXP не малює компоненти, яких немає в його переліку, і
- * робить це МОЛЧА — `sp-number-field` залишав у панелі самі підписи без полів.
- * `sp-slider` задокументований, але страхуємось так само, як із потоковим
- * fetch: якщо після рендеру висота нульова, підміняємо сегментним перемикачем
- * зі звичайних <button>, які в цій панелі демонстративно працюють (якість).
+ * WHY THIS IS NEEDED: UXP does not draw components that are not in its list,
+ * and it does so SILENTLY — `sp-number-field` left only labels in the panel,
+ * with no fields. `sp-slider` is documented, but we guard the same way as with
+ * streaming fetch: if the height is zero after render, we substitute a segmented
+ * control of plain <button> elements, which demonstrably work in this panel (quality).
  *
- * Підміна зберігає той самий id і властивість .value, тому решта коду читає
- * значення однаково і про підміну не знає.
+ * The substitute keeps the same id and .value property, so the rest of the code
+ * reads the value the same way and does not know about the substitution.
  */
 function ensureNumericControl(id, lsKey, values, unit) {
     const el = $(id);
     if (!el) return;
-    if (el.offsetHeight > 0) return;          // намалювався — нічого не робимо
+    if (el.offsetHeight > 0) return;          // it drew — nothing to do
 
-    console.log(`[ui] ${id}: sp-slider не намалювався — ставлю сегментний перемикач`);
+    console.log(`[ui] ${id}: sp-slider did not draw — using a segmented control`);
     const saved = Number(localStorage.getItem(lsKey));
     const initial = values.includes(saved) ? saved : values[Math.floor(values.length / 2)];
 
@@ -210,7 +210,7 @@ function ensureNumericControl(id, lsKey, values, unit) {
     seg.setAttribute('role', 'group');
 
     const holder = document.createElement('div');
-    holder.id = id;                            // той самий id
+    holder.id = id;                            // the same id
     holder.value = String(initial);
     holder.style.display = 'none';
 
@@ -239,9 +239,9 @@ function ensureNumericControl(id, lsKey, values, unit) {
 }
 
 /**
- * sp-picker у Photoshop не перебудовує закритий trigger після асинхронної
- * заміни options. Тому збираємо весь control поза DOM і підміняємо його вже
- * готовим — разом із value, що збігається з одним із пунктів.
+ * In Photoshop, sp-picker does not rebuild a closed trigger after an async
+ * replacement of options. So we build the whole control outside the DOM and
+ * substitute it already finished — together with a value that matches one of the items.
  */
 function fillPicker(id, items, selectedValue) {
     const old = $(id);
@@ -257,13 +257,13 @@ function fillPicker(id, items, selectedValue) {
     picker.setAttribute('value', selectedValue);
     const selected = items.find(it => it.value === selectedValue);
     if (selected) {
-        // UXP іноді лишає trigger порожнім навіть за правильного value.
-        // label/placeholder дають той самий видимий текст як безпечний fallback.
+        // UXP sometimes leaves the trigger empty even with a correct value.
+        // label/placeholder give the same visible text as a safe fallback.
         picker.setAttribute('label', selected.label);
         picker.setAttribute('placeholder', selected.label);
-        // «Sunburst» і «Flare» самі по собі нічого не пояснюють, а місця під
-        // окремий підпис у 230-піксельній панелі немає — тому підказка живе в
-        // title пікера. Пункти sp-menu-item власного title в UXP не мають.
+        // "Sunburst" and "Flare" explain nothing by themselves, and a 230-pixel
+        // panel has no room for a separate caption — so the hint lives in the
+        // picker title. sp-menu-item has no title of its own in UXP.
         if (selected.title) picker.setAttribute('title', selected.title);
     }
 
@@ -289,13 +289,13 @@ function bindModelPicker(picker, items) {
     if (!picker) return;
     picker.addEventListener('change', e => {
         localStorage.setItem(LS.model, e.target.value);
-        // Набір рівнів якості належить МОДЕЛІ: у gpt-image-2.5 є xhigh і max,
-        // у решти їх немає. Без цього рядка в панелі лишились би кнопки, які
-        // нова модель відхилить чи стара не зрозуміє.
+        // The set of quality levels belongs to the MODEL: gpt-image-2.5 has xhigh
+        // and max, the others do not. Without this line the panel would keep buttons
+        // a new model would reject or an old one would not understand.
         initQuality();
         const picked = (items || []).find(it => it.value === e.target.value);
-        // Без else підказка попередньої моделі («вимикається 2026-12-01»)
-        // лишалась би на моделі, якої це не стосується.
+        // Without the else, the previous model's hint ("shuts down 2026-12-01")
+        // would stay on a model it does not apply to.
         if (picked && picked.title) picker.setAttribute('title', picked.title);
         else picker.removeAttribute('title');
         refreshPlanLine();
@@ -303,9 +303,9 @@ function bindModelPicker(picker, items) {
 }
 
 /**
- * Яку модель показати вибраною. Збережена — якщо вона ще є в переліку; для
- * вимкненої — її заміна від провайдера (mini → Flare, а не найдорожча list[0]);
- * інакше перша в переліку.
+ * Which model to show as selected. The saved one if it is still in the list;
+ * for a retired one, the provider's replacement (mini → Flare, not the most
+ * expensive list[0]); otherwise the first in the list.
  */
 function pickSavedModel(list, saved, provider) {
     if (list.some(m => m.id === saved)) return saved;
@@ -315,12 +315,12 @@ function pickSavedModel(list, saved, provider) {
 }
 
 /**
- * Заповнює перелік моделей.
+ * Fills the model list.
  *
- * ⚠️ Два await РОЗДІЛЕНІ свідомо. Раніше `getKey` і `p.models` стояли в одному
- * try — і коли getKey кидав (secureStorage.getItem на відсутньому ключі саме
- * кидає), ми не доходили до p.models, тобто вбудований резервний список навіть
- * не питали. Picker лишався БЕЗ ЖОДНОГО пункту, а причина — лише в консолі.
+ * The two awaits are SEPARATE on purpose. `getKey` and `p.models` used to share
+ * one try — and when getKey threw (secureStorage.getItem on a missing key does
+ * throw), we never reached p.models, so the built-in fallback list was not even
+ * asked. The picker stayed with NO items, and the reason was only in the console.
  */
 async function refreshModels() {
     const p = currentProvider();
@@ -328,33 +328,33 @@ async function refreshModels() {
 
     let apiKey = null;
     try { apiKey = await window.aiAuth.getKey(p.keyName); }
-    catch (e) { console.log('[ui] ключ ще не введено — беру перелік без нього'); }
+    catch (e) { console.log('[ui] key not entered yet — taking the list without it'); }
 
     let list = [];
     try { list = (await p.models(apiKey)) || []; }
-    catch (e) { console.warn('[ui] перелік моделей не отримано:', e.message); }
+    catch (e) { console.warn('[ui] model list was not received:', e.message); }
 
-    // Остання лінія: у провайдерів є вбудований список, який не потребує мережі.
+    // Last line: providers have a built-in list that does not need the network.
     if (!list.length) {
         try { list = (await p.models(null)) || []; }
-        catch (e) { console.warn('[ui] і вбудований перелік не вдався:', e.message); }
+        catch (e) { console.warn('[ui] the built-in list failed too:', e.message); }
     }
     if (!list.length) {
         setStatus(mainI18n.t('status.noModels', { provider: p.label }));
         return;
     }
-    // без цього рядка неможливо відрізнити «мережа не дала переліку» від
-    // «перелік прийшов, але pickerʼа не перемалювало»
-    console.log(`[ui] моделі: ${p.id} → ${list.length} (${list.slice(0, 3).map(m => m.id).join(', ')})`);
+    // without this line "the network gave no list" cannot be told from
+    // "the list arrived, but the picker was not redrawn"
+    console.log(`[ui] models: ${p.id} → ${list.length} (${list.slice(0, 3).map(m => m.id).join(', ')})`);
 
-    // Поки мережевий перелік завантажувався, користувач міг уже вибрати іншого
-    // провайдера. Старий результат не має права перезаписати новий picker.
+    // While the network list was loading, the user may already have chosen another
+    // provider. The old result must not overwrite the new picker.
     if (refreshSeq !== modelRefreshSeq || currentProvider().id !== p.id) return;
 
     const saved = localStorage.getItem(LS.model);
     const pick = pickSavedModel(list, saved, p);
     localStorage.setItem(LS.model, pick);
-    // Вимкнену модель замінено мовчки — а з нею могла змінитись і ціна. Кажемо.
+    // A retired model was replaced silently — and the price may have changed with it. Say so.
     const gone = saved && pick !== saved && p.retirement ? p.retirement(saved) : null;
     if (gone) {
         const next = list.find(m => m.id === pick);
@@ -369,12 +369,12 @@ async function refreshModels() {
     }));
     const picker = fillPicker('model-select', items, pick);
     bindModelPicker(picker, items);
-    // Модель щойно могла змінитись (інший провайдер, інший перелік) — рівні
-    // якості треба перемалювати під неї, поки користувач нічого не натиснув.
+    // The model may just have changed (another provider, another list) — quality
+    // levels must be redrawn for it before the user presses anything.
     initQuality();
 }
 
-/** Гасить елементи, яких провайдер не підтримує, замість тихого ігнорування. */
+/** Disables controls the provider does not support, instead of ignoring them silently. */
 function applyProviderCapabilities() {
     const p = currentProvider();
     const dim = (id, ok, why) => {
@@ -393,9 +393,9 @@ function applyProviderCapabilities() {
 }
 
 /**
- * Перемальовує перемикач якості під МОДЕЛЬ, а не під сталий список.
- * Викликати після кожної зміни моделі — інакше в панелі лишаться кнопки, яких
- * поточна модель не приймає.
+ * Redraws the quality switch for the MODEL, not for a fixed list.
+ * Call it after every model change — otherwise the panel keeps buttons the
+ * current model does not accept.
  */
 function initQuality() {
     const group = $('quality-toggle');
@@ -405,14 +405,14 @@ function initQuality() {
     group.setAttribute('aria-label', mainI18n.t('field.quality'));
     group.innerHTML = '';
 
-    /* ⚠️ ГЕОМЕТРІЯ, А НЕ СМАК: у gpt-image-2.5 рівнів шість. В одному рядку
-       панелі 230 px кожна кнопка отримала б ~31 px і перетворилась на «…».
-       Тому від п'яти рівнів перемикач іде у два ряди по три.
+    /* GEOMETRY, NOT TASTE: gpt-image-2.5 has six levels. In one row of a 230 px
+       panel each button would get ~31 px and turn into "…". So from five levels
+       the switch goes into two rows of three.
 
-       Ряди й межі розставляє JS, а не CSS: :nth-child і :nth-last-child у цій
-       панелі не перевірені, а UXP уже одного разу мовчки проігнорував
-       псевдоклас (:empty малював порожні бейджі як кружечки). Індекс кнопки ми
-       знаємо точно — тож рахуємо тут. */
+       Rows and edges are placed by JS, not CSS: :nth-child and :nth-last-child
+       are unverified in this panel, and UXP has already silently ignored a
+       pseudo-class once (:empty drew empty badges as dots). We know the button
+       index exactly — so we count it here. */
     const perRow = 3;
     const wrap = list.length > 4;
     group.classList.toggle('seg-wrap', wrap);
@@ -442,13 +442,13 @@ function initQuality() {
 }
 
 /**
- * Вибір мережевого маршруту.
+ * Choice of network route.
  *
- * ⚠️ ЩО ЦЕ ВЗАГАЛІ ЛІКУЄ: дозвіл `network.domains` у manifest не має влади над
- * системним фаєрволом — запит іде з процесу Photoshop, і правило «блокувати
- * Photoshop» його ріже. Дочірній `curl` — окремий бінарник, тому під те правило
- * не потрапляє. «Авто» не платить за це нічим, поки прямий шлях працює: воно
- * перемикається лише після реальної мережевої відмови.
+ * WHAT THIS ACTUALLY FIXES: the `network.domains` permission in the manifest has
+ * no power over a system firewall — the request leaves the Photoshop process, and
+ * a "block Photoshop" rule cuts it. A child `curl` is a separate binary, so it
+ * does not fall under that rule. "Auto" costs nothing while the direct path works:
+ * it switches only after a real network failure.
  */
 function initTransport() {
     const group = $('transport-toggle');
@@ -468,8 +468,8 @@ function initTransport() {
         btn.addEventListener('click', () => {
             localStorage.setItem(LS.transport, value);
             httpTransport.setMode(value);
-            // ручний вибір скидає пам'ять про відмову: інакше 'auto' лишалося б
-            // назавжди в curl після однієї випадкової помилки мережі
+            // a manual choice clears the memory of a failure: otherwise 'auto' would
+            // stay on curl forever after one accidental network error
             httpTransport.resetDirectFailure();
             group.querySelectorAll('.seg-btn').forEach(b => {
                 const active = b.dataset.value === value;
@@ -484,18 +484,18 @@ function initTransport() {
     refreshTransportBadge();
 }
 
-/** Бейдж показує не вибір користувача, а фактичний маршрут просто зараз. */
+/** The badge shows not the user's choice but the route actually in use right now. */
 function refreshTransportBadge() {
     setBadge('net-badge', httpTransport.active() ? mainI18n.t('transport.curl') : '');
 }
 
-/* ── Рядок «що саме буде запрошено» ────────────────────────────────────────── */
+/* ── The line "what will actually be requested" ────────────────────────────── */
 
 /**
- * Показує розмір запиту ДО натискання кнопки. Це і є відповідь на «побільше для
- * якості, поменше для економії»: рівень якості видно в мегапікселях, а не на
- * віру. Читання виділення тут поза executeAsModal — це лише `get`, документ не
- * змінюється.
+ * Shows the request size BEFORE the button is pressed. That is the answer to
+ * "more for quality, less to save money": the quality level is visible in
+ * megapixels, not on faith. Reading the selection here is outside executeAsModal —
+ * it is only a `get`, and the document does not change.
  */
 let planTimer = null;
 function schedulePlanLine() {
@@ -514,8 +514,8 @@ function setPlanCard(titleKey, body, ready) {
 }
 
 /**
- * Рядок ціни для картки плану. Порожній, коли спостережень нема — вигадана
- * цифра тут гірша за її відсутність: за нею ухвалюють рішення натискати.
+ * The price line for the plan card. Empty when there are no observations — an
+ * invented number is worse than none here: people decide whether to press based on it.
  */
 function forecastNote({ provider, model, quality, plan }) {
     try {
@@ -532,7 +532,7 @@ function forecastNote({ provider, model, quality, plan }) {
                 high: usageTracker.formatUsd(f.high),
             })}`;
     } catch (e) {
-        console.warn('[ui] прогноз ціни не порахувався:', e.message);
+        console.warn('[ui] price forecast failed:', e.message);
         return '';
     }
 }
@@ -564,8 +564,8 @@ async function refreshPlanLine() {
         if (plan.size) {
             const [w, h] = String(plan.size).split('x').map(Number);
             what = `${w}×${h} · ${(w * h / 1e6).toFixed(2)} ${mainI18n.t('unit.megapixels')}`;
-            // Найдорожчий і найменш передбачуваний режим має називатись до
-            // натискання кнопки, а не з'ясовуватись за рахунком.
+            // The most expensive and least predictable mode must be named before
+            // the button is pressed, not discovered from the bill.
             const caps = provider.capsFor(model);
             if (caps.stablePx && w * h > caps.stablePx) {
                 what += ` · ${mainI18n.t('plan.experimental')}`;
@@ -580,14 +580,14 @@ async function refreshPlanLine() {
             ? ` · ${mainI18n.t('plan.inputNone')}`
             : ` · ${mainI18n.t(io.viaDuplicate ? 'plan.inputPngLarge'
                              : io.lossless ? 'plan.inputPng' : 'plan.inputJpeg')}`
-              /* Форма важить: за нею модель отримує сусідні пікселі як контекст,
-                 а не як дозвіл малювати. Обіцяємо її лише там, де справді
-                 зможемо прочитати — у CMYK getSelection не викликаємо взагалі. */
+              /* The shape matters: through it the model receives neighboring pixels
+                 as context, not as permission to paint. We promise it only where we
+                 can actually read it — in CMYK we do not call getSelection at all. */
               + (io.wantMask ? ` · ${mainI18n.t(
                     !sel.solid && capture.isSafeMode(String(doc.mode))
                         ? 'plan.withShapeMask' : 'plan.withMask')}` : '')
-              // Жорсткий край при масці — це видимий рубець на стику. Дефолт 16 px
-              // ставився не з естетики: див. коментар до buildRectMaskPng.
+              // A hard edge with a mask is a visible seam at the join. The 16 px
+              // default was not an aesthetic choice: see the comment on buildRectMaskPng.
               + (io.wantMask && !s.feather ? ` · ${mainI18n.t('plan.hardEdge')}` : '');
         setPlanCard('plan.readyTitle', mainI18n.t('plan.request', {
             what,
@@ -600,11 +600,11 @@ async function refreshPlanLine() {
         }), true);
     } catch (e) {
         setPlanCard('plan.notReadyTitle', '', false);
-        console.warn('[ui] план не порахувався:', e.message);
+        console.warn('[ui] plan failed:', e.message);
     }
 }
 
-/* ── Постійний журнал витрат ───────────────────────────────────────────────── */
+/* ── Persistent cost log ────────────────────────────────────────────────────── */
 
 function recordUsage(meta, usage) {
     ledger.record(meta, usage);
@@ -617,7 +617,7 @@ function amountWithUnknown(summary) {
         ? mainI18n.t('usage.unknown', { amount, count: summary.unknownCost }) : amount;
 }
 
-/** Один рядок зведення: сьогодні / 7 днів / усього. */
+/** One summary row: today / 7 days / all. */
 function usageCard(label, data) {
     const card = dom.el('div', 'usage-card');
     card.append(
@@ -631,7 +631,7 @@ function usageCard(label, data) {
     return card;
 }
 
-/** Один запит у переліку останніх. */
+/** One request in the recent list. */
 function usageRow(entry) {
     const when = new Date(entry.at);
     const date = when.toLocaleDateString(mainI18n.dateLocale(), { day: '2-digit', month: '2-digit' });
@@ -652,7 +652,7 @@ function usageRow(entry) {
     return row;
 }
 
-/** Компактний рядок під кнопкою — єдине, що видно без розгортання секції. */
+/** Compact line under the button — the only thing visible without expanding the section. */
 function usageCompactLine(stats) {
     const lastAmount = Number.isFinite(stats.last.costUsd)
         ? `≈${usageTracker.formatUsd(stats.last.costUsd)}` : mainI18n.t('usage.costUnknown');
@@ -691,7 +691,7 @@ function renderUsage() {
     dom.fill(listEl, stats.recent.map(usageRow));
 }
 
-/* ── Референси ─────────────────────────────────────────────────────────────── */
+/* ── References ─────────────────────────────────────────────────────────────── */
 
 function renderRefs() {
     dom.fill($('ref-list'), references.map((r, i) => {
@@ -724,12 +724,12 @@ async function pickReferences() {
         refreshPlanLine();
     } catch (e) {
         if (e && /cancel/i.test(String(e.message))) return;
-        console.error('[ui] референси не додались:', e.message);
+        console.error('[ui] references were not added:', e.message);
         setStatus(mainI18n.t('refs.addError', { error: e.message }));
     }
 }
 
-/* ── Пресети, історія, кеш ─────────────────────────────────────────────────── */
+/* ── Presets, history, cache ────────────────────────────────────────────────── */
 
 function renderPresets() {
     dom.fill($('preset-list'), presetManager.getAll().map(p => {
@@ -757,9 +757,9 @@ function renderHistory() {
             if (input) {
                 input.value = h.prompt || '';
                 localStorage.setItem(LS.prompt, input.value);
-                // ⚠️ Без цього рядка лічильник лишався від попереднього тексту:
-                // відновлений із історії промпт міг бути будь-якої довжини, а
-                // подія input при програмній зміні value не спрацьовує.
+                // Without this line the counter stayed on the previous text:
+                // a prompt restored from history can be any length, and the input
+                // event does not fire when value is changed from code.
                 updateCharCount('prompt-input', 'prompt-count');
             }
             if (h.ctx) { lastRun = { ...h, references: [] }; setBusy(false); }
@@ -806,33 +806,33 @@ function buildPrompt() {
     return text.trim();
 }
 
-/* ── Вставка ───────────────────────────────────────────────────────────────── */
+/* ── Insertion ─────────────────────────────────────────────────────────────── */
 
 /**
- * Один шлях вставки для НОВОЇ генерації і для повтору з кешу — щоб маска,
- * канал і залишок рахувались однаково і не розходились між двома копіями коду.
+ * One insertion path for a NEW generation and for a repeat from cache — so the
+ * mask, channel and residual are computed the same way and do not diverge across two copies of the code.
  */
 async function insertImage(b64, ctx, target, feather) {
     await core.executeAsModal(async () => {
         const channelName = 'AiSel_' + Date.now();
         let haveChannel = false;
         try {
-            // Під час довгої генерації користувач може змінити виділення. Не
-            // застосовуємо чужу маску до старої області: канал зберігаємо лише
-            // коли поточні bounds усе ще збігаються з цільовими.
+            // During a long generation the user can change the selection. Do not
+            // apply someone else's mask to the old area: save the channel only
+            // when the current bounds still match the target.
             const current = await readSelectionBounds(app.activeDocument).catch(() => null);
             const currentTarget = current && current.bounds ? geometry.integerTarget(current.bounds) : null;
             const sameTarget = currentTarget && ['left', 'top', 'right', 'bottom']
                 .every(k => currentTarget[k] === target[k]);
-            if (!sameTarget) throw new Error('активне виділення змінилося — використовую цільовий прямокутник');
-            // Офіційний DOM Selection API (PS 25+). Попередній batchPlay
-            // помилково кодував selection як enum і тому не створював канал.
+            if (!sameTarget) throw new Error('the active selection changed — using the target rectangle');
+            // Official DOM Selection API (PS 25+). The previous batchPlay
+            // encoded selection as an enum by mistake and therefore created no channel.
             await app.activeDocument.selection.save(channelName);
             haveChannel = true;
         } catch (e) {
-            // Немає активного виділення (типовий випадок повтору з кешу) —
-            // place.js побудує маску з прямокутника target.
-            console.log('[main] виділення в канал не збережено:', e.message);
+            // No active selection (the typical case for a repeat from cache) —
+            // place.js will build the mask from the target rectangle.
+            console.log('[main] selection was not saved to a channel:', e.message);
         }
         try {
             const report = await place.placeGeneratedSmartObject(
@@ -842,10 +842,10 @@ async function insertImage(b64, ctx, target, feather) {
             const el = $('residual-text');
             if (el) {
                 const zero = [r.dx, r.dy, r.dw, r.dh].every(v => Math.abs(Number(v) || 0) < 0.01);
-                /* ⚠️ Відкат на прямокутну маску був ЛИШЕ в консолі. А це саме той
-                   випадок, коли форма виділення переставала різати шар: усе, що
-                   ділить з ціллю bounding box, лишалось перемальованим. Мовчати
-                   про це не можна — користувач дивиться на результат, а не в лог. */
+                /* Falling back to a rectangular mask used to be ONLY in the console.
+                   And this is exactly the case where the selection shape stopped cutting
+                   the layer: everything sharing the target's bounding box stayed
+                   repainted. That cannot stay silent — the user looks at the result, not the log. */
                 const fallback = haveChannel ? '' : ` · ${mainI18n.t('residual.rectMask')}`;
                 el.textContent = (zero
                     ? mainI18n.t('residual.exact')
@@ -877,7 +877,7 @@ async function reinsert(cacheId) {
         const b64 = await cache.get(cacheId);
         if (!b64) { setStatus(mainI18n.t('cache.fileMissing')); renderCache(); return; }
         const m = entry.meta || {};
-        // Якщо є активне виділення — вставляємо в НЬОГО; інакше в збережену область.
+        // If there is an active selection — insert into IT; otherwise into the saved area.
         const sel = await readSelectionBounds(doc).catch(() => null);
         let ctx = m.ctx, target = m.target;
         if (sel && sel.bounds) {
@@ -894,18 +894,18 @@ async function reinsert(cacheId) {
         await insertImage(b64, ctx, target, readSettings().feather);
         setStatus(mainI18n.t('cache.inserted'));
     } catch (e) {
-        console.error('[main] повтор із кешу:', e);
+        console.error('[main] repeat from cache:', e);
         setStatus(mainI18n.t('error.failed', { error: e.message || e }));
     } finally {
         setBusy(false);
     }
 }
 
-/* ── Головний потік ────────────────────────────────────────────────────────── */
+/* ── Main flow ─────────────────────────────────────────────────────────────── */
 
 /**
- * Передумови запуску. Кожна відмова — showAlert і null; тримати їх в onGenerate
- * означало б двадцять рядків guard-ів перед першою корисною дією.
+ * Preconditions for a run. Every refusal is a showAlert and null; keeping them
+ * in onGenerate would mean twenty lines of guards before the first useful action.
  */
 async function collectRunInputs(mode) {
     const doc = app.activeDocument;
@@ -914,8 +914,8 @@ async function collectRunInputs(mode) {
     const model = localStorage.getItem(LS.model);
     if (!model) { await core.showAlert(mainI18n.t('alert.chooseModel')); return null; }
 
-    /* Лише «Перегенерувати» бере старий промпт. «Уточнити» — навпаки: увесь
-       його сенс у НОВОМУ тексті, тому він читає поле, як і звичайний запуск. */
+    /* Only Regenerate takes the old prompt. Refine is the opposite: its whole
+       point is the NEW text, so it reads the field, like an ordinary run. */
     const prompt = mode === 'again' && lastRun ? lastRun.prompt : buildPrompt();
     if (!prompt) { await core.showAlert(mainI18n.t('alert.writePrompt')); return null; }
 
@@ -929,16 +929,16 @@ async function collectRunInputs(mode) {
 }
 
 /**
- * Область: або з живого виділення, або та сама, що минулого разу.
- * null означає «працювати нема з чим», alert уже показано.
+ * The area: either from the live selection, or the same one as last time.
+ * null means "there is nothing to work with", and the alert has already been shown.
  */
 async function resolveRegion(reuse, doc, padPercent) {
     if (reuse && lastRun && lastRun.target) {
         setStatus(mainI18n.t('status.sameArea'));
-        /* Область та сама, а відступ контексту читаємо ЗАРАЗ. ⚠️ Раніше сюди
-           поверталось збережене lastRun.ctx — і зміна повзунка «контекст» перед
-           «Перегенерувати» мовчки не діяла: той самий кадр, та сама ціна,
-           жодного натяку в інтерфейсі (виміряно 2026-09-09). */
+        /* The area is the same, but the context pad is read NOW. This used to
+           return the saved lastRun.ctx — and moving the context slider before
+           Regenerate silently did nothing: the same frame, the same price,
+           no hint in the interface (measured 2026-09-09). */
         return { target: lastRun.target, ctx: expandForContext(lastRun.target, doc, padPercent) };
     }
     setStatus(mainI18n.t('status.readSelection'));
@@ -952,22 +952,22 @@ async function resolveRegion(reuse, doc, padPercent) {
         return null;
     }
     if (!sel.solid) {
-        // Не проблема: маска шару робиться з каналу справжнього виділення,
-        // тому ласо й еліпс обрізаються правильно. Запит іде по bounding box.
-        console.log('[main] виділення не прямокутне — запит по bounding box, ' +
-                    'маска шару по фактичній формі');
+        // Not a problem: the layer mask is built from the real selection channel,
+        // so a lasso and an ellipse are cropped correctly. The request uses the bounding box.
+        console.log('[main] selection is not rectangular — request uses the bounding box, ' +
+                    'layer mask uses the actual shape');
     }
     return { target, ctx: expandForContext(target, doc, padPercent) };
 }
 
 /**
- * Що поїде в тілі запиту: чи буде маска і в якому форматі вхід.
+ * What goes in the request body: whether there will be a mask, and in which format the input is.
  *
- * ⚠️ ОДНЕ МІСЦЕ НА ДВОХ СПОЖИВАЧІВ НАВМИСНО. Доки це рішення жило двічі — у
- * картці плану й у capturePayload — вони розійшлись: картка дивилась лише на
- * галку «вхід без втрат» і обіцяла «вхід JPEG», тоді як маска мовчки змушувала
- * PNG. Виміряно на живому хості 2026-09-09: картка казала 58 КБ JPEG, полетіло
- * 1227 КБ PNG. Формула формату — та сама, що в capture.captureRegion:
+ * ONE PLACE FOR TWO CONSUMERS ON PURPOSE. While this decision lived twice — in
+ * the plan card and in capturePayload — they diverged: the card looked only at
+ * the "lossless input" checkbox and promised "input JPEG", while the mask silently
+ * forced PNG. Measured on a live host 2026-09-09: the card said 58 KB JPEG, 1227 KB
+ * PNG was sent. The format formula is the same as in capture.captureRegion:
  * lossless = wantLossless || requirePng.
  */
 function inputPlan(s, provider, ctx) {
@@ -981,10 +981,10 @@ function inputPlan(s, provider, ctx) {
     };
 }
 
-/** Захоплення пікселів плюс маска запиту — те, що піде в тіло запиту. */
+/** Capture pixels plus the request mask — what will go in the request body. */
 async function capturePayload({ s, provider, ctx, target }) {
-    /* Рішення про маску ухвалюємо ДО захоплення: OpenAI вимагає, щоб вхід і
-       маска були одного формату, тому наявність маски визначає формат входу. */
+    /* The mask decision is made BEFORE capture: OpenAI requires the input and
+       the mask to be the same format, so the presence of a mask decides the input format. */
     const { wantMask } = inputPlan(s, provider, ctx);
 
     let cap = { blob: null, lossless: false };
@@ -993,45 +993,46 @@ async function capturePayload({ s, provider, ctx, target }) {
         cap = await core.executeAsModal(
             () => capture.captureRegion(ctx, s.layerOnly, s.lossless, wantMask),
             { commandName: mainI18n.t('command.capture') });
-        console.log(`[main] захоплено: ${cap.docMode} ${cap.bpc}біт` +
-                    `${cap.viaDuplicate ? ' (через дублікат)' : ''}` +
+        console.log(`[main] captured: ${cap.docMode} ${cap.bpc}-bit` +
+                    `${cap.viaDuplicate ? ' (via duplicate)' : ''}` +
                     `${cap.lossless ? ' PNG' : ' JPEG'}`);
     }
 
-    /* Форму виділення читаємо ОКРЕМИМ модальним блоком, уже знаючи режим
-       документа: у CMYK getSelection валить Photoshop, і туди ми не йдемо. */
+    /* The selection shape is read in a SEPARATE modal block, once the document
+       mode is known: in CMYK getSelection crashes Photoshop, and we do not go there. */
     let shape = null;
     if (wantMask) {
         const got = await core.executeAsModal(() => capture.selectionShape(ctx, target, cap.docMode),
             { commandName: mainI18n.t('command.readSelection') });
         shape = got.data;
-        if (got.reason) console.warn('[main] форма виділення недоступна, маска прямокутна:', got.reason);
+        if (got.reason) console.warn('[main] selection shape unavailable, mask is rectangular:', got.reason);
     }
 
     const mask = wantMask
         ? capture.maskForRequest({ ctx, target, feather: s.feather, input: cap.blob, shape })
         : { blob: null, bytes: 0, reason: '' };
-    if (mask.reason) console.warn('[main] маски не буде:', mask.reason);
-    else if (mask.blob) console.log(`[main] маска ${ctx.w}×${ctx.h} (${mask.source}), ` +
-                                    `край ${s.feather} px: ${(mask.bytes / 1024).toFixed(1)} КБ`);
+    if (mask.reason) console.warn('[main] there will be no mask:', mask.reason);
+    else if (mask.blob) console.log(`[main] mask ${ctx.w}×${ctx.h} (${mask.source}), ` +
+                                    `edge ${s.feather} px: ${(mask.bytes / 1024).toFixed(1)} KB`);
 
     return { input: cap.blob, mask: mask.blob };
 }
 
-/** Пам'ять про запуск: кеш, історія і кнопки повтору. */
+/** Memory of a run: cache, history and the repeat buttons. */
 async function rememberRun(meta, image, s) {
     const cacheId = await cache.save(image, meta);
     renderCache();
-    // cacheId у lastRun — щоб перший хід «Уточнити» мав звідки взяти пікселі,
-    // не тримаючи мегабайти base64 у пам'яті панелі між запусками.
+    // cacheId in lastRun — so the first Refine turn has somewhere to take pixels
+    // from, without holding megabytes of base64 in panel memory between runs.
     lastRun = { ...meta, cacheId };
     historyManager.add({ ...meta, cacheId, settings: s });
     renderHistory();
 }
 
 /**
- * Чи є що уточнювати. Три умови, і кожна вміє відмовити окремо: був запуск,
- * від нього лишились пікселі або id розмови, і провайдер узагалі вміє маршрут.
+ * Whether there is something to refine. Three conditions, and each can refuse
+ * on its own: there was a run, pixels or a conversation id remain from it, and
+ * the provider can do the route at all.
  */
 function canRefine() {
     if (!lastRun || !lastRun.ctx) return false;
@@ -1040,11 +1041,11 @@ function canRefine() {
 }
 
 /**
- * Уточнення: запит до провайдера плюс те, що треба знати вставці.
+ * Refine: the request to the provider plus what insertion needs to know.
  *
- * ⚠️ ГЕОМЕТРІЯ БЕРЕТЬСЯ З ТОГО ЗАПУСКУ, ЯКИЙ УТОЧНЮЄМО, а не з поточних
- * налаштувань. Уточнюється вже намальована плитка; якби ми, як «Перегенерувати»,
- * перечитали повзунок контексту, картинка лягла б у кадр, якого не зображує.
+ * GEOMETRY COMES FROM THE RUN BEING REFINED, not from the current settings.
+ * What is refined is an already painted tile; if we reread the context slider
+ * the way Regenerate does, the picture would land in a frame it does not depict.
  */
 async function runRefine({ provider, model, prompt, apiKey, s }) {
     const previousImage = lastRun.responseId ? null : await cache.get(lastRun.cacheId);
@@ -1054,9 +1055,9 @@ async function runRefine({ provider, model, prompt, apiKey, s }) {
     }
     setStatus(mainI18n.t('status.refining'));
     const plan = lastRun.plan || geometry.planRequest(provider.capsFor(model), lastRun.ctx, s.quality);
-    console.log('[main] уточнення:', JSON.stringify(plan),
+    console.log('[main] refine:', JSON.stringify(plan),
                 'ctx', lastRun.ctx.w + '×' + lastRun.ctx.h,
-                lastRun.responseId ? 'продовження розмови' : 'перший хід');
+                lastRun.responseId ? 'conversation continuation' : 'first turn');
 
     const res = await provider.refine({
         apiKey, model, prompt, plan,
@@ -1099,20 +1100,20 @@ async function onGenerate(mode) {
             if (!done) return;
             ({ res, plan, ctx, target } = done);
         } else {
-            /* 1. Область */
+            /* 1. Area */
             const region = await resolveRegion(mode === 'again', doc, s.padPercent);
             if (!region) return;
             ({ target, ctx } = region);
 
-            /* 2. Що просити в провайдера */
+            /* 2. What to ask the provider */
             plan = geometry.planRequest(provider.capsFor(model), ctx, s.quality);
-            console.log('[main] план запиту:', JSON.stringify(plan), 'ctx', ctx.w + '×' + ctx.h);
+            console.log('[main] request plan:', JSON.stringify(plan), 'ctx', ctx.w + '×' + ctx.h);
 
-            /* 3. Пікселі й маска — документ користувача не змінюється */
+            /* 3. Pixels and mask — the user's document does not change */
             const payload = await capturePayload({ s, provider, ctx, target });
             input = payload.input;
 
-            /* 4. Генерація — поза модальним контекстом, щоб Photoshop не блокувався */
+            /* 4. Generation — outside the modal context, so Photoshop is not blocked */
             setStatus(mainI18n.t('status.generating'));
             const wantPreview = s.livePreview && provider.supportsStream !== false;
             refBlobs = (provider.supportsReferences !== false)
@@ -1138,11 +1139,11 @@ async function onGenerate(mode) {
         if (!images.length) { await core.showAlert(mainI18n.t('alert.noImages')); return; }
         showPreview(images[0]);
 
-        // Записуємо одразу після успішної відповіді API: гроші вже витрачені,
-        // навіть якщо користувач перемкне документ і вставку доведеться скасувати.
-        /* ⚠️ route у записі — не прикраса. Прогноз ціни бере медіану ВЛАСНИХ
-           запитів користувача; токени розмови й токени images/edits — різні
-           величини, і змішані в одну медіану вони зіпсували б обидві оцінки. */
+        // Record immediately after a successful API response: the money is already
+        // spent, even if the user switches documents and insertion has to be cancelled.
+        /* route on the record is not decoration. The price forecast takes the median
+           of the user's OWN requests; conversation tokens and images/edits tokens are
+           different quantities, and mixed into one median they would spoil both estimates. */
         recordUsage({
             provider: provider.id,
             providerLabel: provider.label,
@@ -1154,7 +1155,7 @@ async function onGenerate(mode) {
             hasImageInput: refining || !!input || refBlobs.length > 0,
         }, res.usage);
 
-        /* 5. Вставка */
+        /* 5. Insertion */
         if (!app.activeDocument || app.activeDocument.id !== docId) {
             await core.showAlert(mainI18n.t('alert.documentChanged'));
             return;
@@ -1162,11 +1163,11 @@ async function onGenerate(mode) {
         setStatus(mainI18n.t('status.inserting'));
         await insertImage(images[0], ctx, target, s.feather);
 
-        /* 6. Пам'ять про запуск.
-           Уточнення НЕ переписує prompt: «Перегенерувати» після нього має
-           означати «той самий початковий задум наново», а не повтор репліки
-           «зроби тінь м'якшою» по вихідних пікселях. Змінюються лише ланка
-           розмови (responseId) і кадр, який тепер уточнюємо (cacheId у rememberRun). */
+        /* 6. Memory of the run.
+           Refine does NOT overwrite the prompt: Regenerate after it must mean
+           "the same original idea again", not a repeat of the line "make the
+           shadow softer" against the original pixels. Only the conversation link
+           (responseId) and the frame now being refined (cacheId in rememberRun) change. */
         await rememberRun({
             prompt: refining ? lastRun.prompt : prompt,
             provider: provider.id, model, ctx, target, plan,
@@ -1189,18 +1190,18 @@ async function onGenerate(mode) {
     } finally {
         abortCtrl = null;
         setBusy(false);
-        // 'auto' могло перемкнутися на curl усередині цього запуску — бейдж має
-        // показувати фактичний маршрут, а не той, що був на старті
+        // 'auto' may have switched to curl inside this run — the badge must
+        // show the actual route, not the one from the start
         try { refreshTransportBadge(); } catch (e) {}
     }
 }
 
-/* ── Запуск ────────────────────────────────────────────────────────────────── */
+/* ── Startup ───────────────────────────────────────────────────────────────── */
 
 /**
- * Ініціалізація UI. Кожен блок в окремому try: у старому плагіні
- * ReferenceError у initializeModels обривав ініціалізацію, і разом із ним
- * тихо вмирали refine-пікер та вкладка чату.
+ * UI initialization. Each block is in its own try: in the old plugin a
+ * ReferenceError in initializeModels aborted initialization, and with it the
+ * refine picker and the chat tab died silently.
  */
 async function initUI() {
     try {
@@ -1218,13 +1219,13 @@ async function initUI() {
             applyProviderCapabilities();
             refreshPlanLine();
         });
-    } catch (e) { console.error('[ui] провайдери:', e.message); }
+    } catch (e) { console.error('[ui] providers:', e.message); }
 
-    try { await refreshModels(); } catch (e) { console.error('[ui] моделі:', e.message); }
+    try { await refreshModels(); } catch (e) { console.error('[ui] models:', e.message); }
 
-    try { initQuality(); } catch (e) { console.error('[ui] якість:', e.message); }
-    try { initTransport(); } catch (e) { console.error('[ui] маршрут мережі:', e.message); }
-    try { applyProviderCapabilities(); } catch (e) { console.error('[ui] можливості:', e.message); }
+    try { initQuality(); } catch (e) { console.error('[ui] quality:', e.message); }
+    try { initTransport(); } catch (e) { console.error('[ui] network route:', e.message); }
+    try { applyProviderCapabilities(); } catch (e) { console.error('[ui] capabilities:', e.message); }
 
     try {
         const bind = (id, key, def, prop = 'value') => {
@@ -1241,7 +1242,7 @@ async function initUI() {
         bind('prompt-input', LS.prompt, '');
         bind('context-pad', LS.pad, '15');
         bind('edge-feather', LS.feather, '16');
-        // sp-slider віддає значення подією input, а не лише change
+        // sp-slider emits the value on the input event, not only on change
         for (const id of ['context-pad', 'edge-feather']) {
             const el = $(id);
             if (el) el.addEventListener('input', () => {
@@ -1260,34 +1261,34 @@ async function initUI() {
                 localStorage.setItem(LS.prompt, prompt.value);
                 updateCharCount('prompt-input', 'prompt-count');
             });
-            // відновлений із localStorage промпт теж може бути довгим
+            // a prompt restored from localStorage can be long too
             updateCharCount('prompt-input', 'prompt-count');
         }
-    } catch (e) { console.error('[ui] налаштування:', e.message); }
+    } catch (e) { console.error('[ui] settings:', e.message); }
 
-    // Перевірка рендеру — ПІСЛЯ біндингу, бо підміна забирає елемент із DOM.
+    // The render check is AFTER binding, because the substitute removes the element from the DOM.
     try {
         ensureNumericControl('context-pad', LS.pad, [0, 5, 10, 15, 25, 40], '%');
         ensureNumericControl('edge-feather', LS.feather, [0, 8, 16, 32, 64, 128, 256], '');
-    } catch (e) { console.error('[ui] контроли чисел:', e.message); }
+    } catch (e) { console.error('[ui] numeric controls:', e.message); }
 
-    // ⚠️ load() ОБОВ'ЯЗКОВИЙ. Без нього presetManager стартує з порожнім масивом,
-    // і перший же add() зберігав порожній список плюс новий пункт — тобто тихо
-    // знищував усі раніше збережені пресети, а вбудований «Upscale & Enhance»
-    // не з'являвся жодного разу. Гейт — тест «кожен менеджер зі станом справді
-    // завантажується під час ініціалізації».
-    try { await presetManager.load(); renderPresets(); } catch (e) { console.error('[ui] пресети:', e.message); }
-    try { await historyManager.load(); renderHistory(); } catch (e) { console.error('[ui] історія:', e.message); }
-    try { renderCache(); } catch (e) { console.error('[ui] кеш:', e.message); }
-    try { renderRefs(); renderUsage(); } catch (e) { console.error('[ui] статистика:', e.message); }
+    // load() IS REQUIRED. Without it presetManager starts with an empty array,
+    // and the very first add() saved the empty list plus the new item — silently
+    // destroying every previously saved preset, and the built-in "Upscale & Enhance"
+    // never appeared. The gate is the test "every stateful manager really loads
+    // during initialization".
+    try { await presetManager.load(); renderPresets(); } catch (e) { console.error('[ui] presets:', e.message); }
+    try { await historyManager.load(); renderHistory(); } catch (e) { console.error('[ui] history:', e.message); }
+    try { renderCache(); } catch (e) { console.error('[ui] cache:', e.message); }
+    try { renderRefs(); renderUsage(); } catch (e) { console.error('[ui] statistics:', e.message); }
     try { await refreshPlanLine(); } catch (e) {}
 }
 
 /**
- * Слухач подій Photoshop, щоб рядок «що буде запрошено» жив сам.
- * Форма API мінялась (масив рядків → масив об'єктів), тому пробуємо обидві й
- * тихо обходимось без цього, якщо жодна не пройшла: рядок тоді оновлюється на
- * зміну налаштувань і при кліку на панель.
+ * A Photoshop event listener so the "what will be requested" line stays alive
+ * on its own. The API shape changed (array of strings → array of objects), so we
+ * try both and quietly do without it if neither works: the line then updates on
+ * a settings change and when the panel is clicked.
  */
 function watchSelection() {
     const events = ['set', 'historyStateChanged', 'select'];
@@ -1295,11 +1296,11 @@ function watchSelection() {
     try {
         action.addNotificationListener(events.map(event => ({ event })), cb);
         return;
-    } catch (e) { /* друга форма нижче */ }
+    } catch (e) { /* the other form is below */ }
     try {
         action.addNotificationListener(events, cb);
     } catch (e) {
-        console.log('[ui] подій виділення не слухаю:', e.message);
+        console.log('[ui] not listening to selection events:', e.message);
     }
 }
 
@@ -1321,7 +1322,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (abortCtrl) { abortCtrl.abort(); setStatus(mainI18n.t('status.cancelling')); }
     });
 
-    // Esc — скасувати активний запит.
+    // Esc — cancel the active request.
     document.addEventListener('keydown', e => {
         if (e.key === 'Escape' && busy && abortCtrl) {
             e.preventDefault();
@@ -1343,8 +1344,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const clearUsage = $('clear-usage-btn');
     if (clearUsage) clearUsage.addEventListener('click', () => {
         localStorage.removeItem(LS.usage);
-        // Старий безчасовий лічильник більше не читається; очищаємо його разом
-        // із новим журналом, якщо він лишився від попередньої версії.
+        // The old timeless counter is no longer read; clear it together with
+        // the new log if it is left over from a previous version.
         localStorage.removeItem(LEGACY.sessionUsage);
         renderUsage();
         setStatus(mainI18n.t('status.usageCleared'));
@@ -1361,8 +1362,8 @@ document.addEventListener('DOMContentLoaded', () => {
         renderPresets();
     });
 
-    // Секції, що згортаються. Підтримуємо мишу й клавіатуру та синхронізуємо
-    // aria-expanded — у вузькій панелі це ще й надійне джерело стану шеврона.
+    // Collapsible sections. Mouse and keyboard are both supported, and
+    // aria-expanded stays in sync — in a narrow panel it is also a reliable source of the chevron state.
     for (const [head, body] of [['opts-header', 'opts-body'], ['usage-header', 'usage-body'],
                                 ['net-header', 'net-body'],
                                 ['ref-header', 'ref-body'], ['cache-header', 'cache-body'],
@@ -1383,9 +1384,9 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-/* Ключ змінився — перелік моделей міг змінитись разом із ним. */
+/* The key changed — the model list may have changed with it. */
 document.addEventListener('exactfill:keychange', async () => {
-    try { await refreshModels(); } catch (e) { console.error('[ui] моделі після ключа:', e.message); }
+    try { await refreshModels(); } catch (e) { console.error('[ui] models after the key:', e.message); }
     try { applyProviderCapabilities(); refreshPlanLine(); } catch (e) {}
 });
 

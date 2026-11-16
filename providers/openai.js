@@ -1,20 +1,20 @@
 /* ============================================================================
- *  providers/openai.js — провайдер OpenAI (gpt-image-*).
+ *  providers/openai.js — the OpenAI provider (gpt-image-*).
  *
- *  Викинуто проти старого openAiSdk.js:
- *    • generateImageWithContext + увесь шлях /v1/responses — імпортувався, але
- *      не викликався НІДЕ (rg давав одне попадання — сам import). Повернувся
- *      2026-09-09 як `refine` — уже з викликом і з єдиною причиною існувати:
- *      пам'ять про попередній кадр, якої images/edits не має принципово.
- *    • refinePrompt, generateChat — мертві фічі, які користувач не використовує
- *    • OPENAI_IMAGE2_SIZES / OPENAI_IMAGE1_SIZES — декларації, що нічого
- *      не валідували; тепер обмеження живуть у caps і споживаються geometry.js
+ *  Removed relative to the old openAiSdk.js:
+ *    • generateImageWithContext + the whole /v1/responses path — it was imported
+ *      but called NOWHERE (rg found one hit: the import itself). It came back
+ *      on 2026-09-09 as `refine` — now with a call, and with the only reason to
+ *      exist: memory of the previous frame, which images/edits fundamentally lacks.
+ *    • refinePrompt, generateChat — dead features the user does not use
+ *    • OPENAI_IMAGE2_SIZES / OPENAI_IMAGE1_SIZES — declarations that validated
+ *      nothing; limits now live in caps and are consumed by geometry.js
  *
- *  Ключове: gpt-image-2 приймає ДОВІЛЬНИЙ розмір (кратний 16, edge ≤3840,
- *  ratio ≤3:1, сума пікселів 655 360…8 294 400). Тому просимо рівно розмір
- *  виділення — і ресемпл при вставці стає косметичним замість масштабування
- *  всього кадру. Старий код сам відмовлявся це робити: поріг «≥1 MP» був
- *  хибний, а на quality=high preferLarge свідомо брав найбільший кандидат.
+ *  The key point: gpt-image-2 accepts an ARBITRARY size (multiple of 16, edge ≤3840,
+ *  ratio ≤3:1, pixel count 655,360…8,294,400). So we ask for exactly the selection
+ *  size — and the resample on insert becomes cosmetic instead of scaling the whole
+ *  frame. The old code refused to do this: the "≥1 MP" threshold was wrong, and
+ *  at quality=high preferLarge deliberately took the largest candidate.
  * ========================================================================== */
 
 const { buildMultipart, request, requestStream, withRetry, HttpError } = require('./http.js');
@@ -25,33 +25,33 @@ const BASE = 'https://api.openai.com/v1/';
 const PARTIAL_IMAGES = 3;
 
 /**
- * Формат відповіді. НЕ налаштування — несуча конструкція.
+ * Response format. NOT a setting — a load-bearing structure.
  *
- * ⚠️ Точна вставка тримається на тому, що place.js вписує в отриманий файл
- * чанк pHYs (png.setPngResolution) з роздільністю документа: без нього
- * placeEvent вважає растр 72 ppi і Smart Object приїжджає іншого розміру.
- *   • WebP поля роздільності НЕ МАЄ ВЗАГАЛІ — там цієї опори не існує;
- *   • JPEG має JFIF density, але це окремий записувач плюс парсер SOF замість
- *     readPngSize, тобто другий формат наскрізь: place.js, кеш, прев'ю.
- * Тому webp/jpeg тут не «ще одне значення в списку», а окрема робота. Поки її
- * нема — формат один, і гейт у test/platform.test.js стереже цю зв'язку.
+ * Exact placement depends on place.js writing a pHYs chunk into the received
+ * file (png.setPngResolution) with the document resolution: without it placeEvent
+ * treats the raster as 72 ppi and the Smart Object arrives at a different size.
+ *   • WebP has NO resolution field AT ALL — that support does not exist there;
+ *   • JPEG has JFIF density, but that is a separate writer plus an SOF parser
+ *     instead of readPngSize, a second format all the way through: place.js, cache, preview.
+ * So webp/jpeg here is not "one more value in a list", it is separate work. Until
+ * that exists there is one format, and the gate in test/platform.test.js guards the link.
  */
 const OUTPUT_FORMAT = 'png';
 
-/* ── Можливості моделей ────────────────────────────────────────────────────── *
- * ⚠️ caps — ЄДИНА декларація того, що модель уміє. Її читають geometry.js
- * (розмір запиту), main.js (які кнопки якості малювати) і editImage нижче (які
- * поля класти в multipart). Раніше частина цього знання жила рядковими
- * винятками на кшталт `if (model !== 'gpt-image-2')`, і кожна нова модель
- * вимагала правок у чотирьох файлах. Тепер нова модель — це один рядок MODELS.
+/* ── Model capabilities ────────────────────────────────────────────────────── *
+ * caps is the ONLY declaration of what a model can do. geometry.js reads it
+ * (request size), main.js (which quality buttons to draw), and editImage below
+ * (which fields to put in the multipart). Part of this knowledge used to live
+ * as string exceptions like `if (model !== 'gpt-image-2')`, and every new model
+ * needed edits in four files. A new model is now one MODELS row.
  * ────────────────────────────────────────────────────────────────────────── */
 
 /**
- * Геометричні можливості — читає geometry.js, не хардкодить сам.
+ * Geometric capabilities — geometry.js reads them; it does not hardcode them.
  *
- * `stablePx` — межа, вище якої документація OpenAI називає результат
- * експериментальним (понад 2560×1440). Запит проходить, але саме тут і
- * найдорожче, і найменш передбачувано, тому картка плану про це попереджає.
+ * `stablePx` is the limit above which OpenAI's docs call the result experimental
+ * (beyond 2560×1440). The request still goes through, but that is where it is
+ * both most expensive and least predictable, so the plan card warns about it.
  */
 const ARBITRARY = {
     arbitrary: true, step: 16, maxEdge: 3840,
@@ -64,9 +64,9 @@ const FIXED = {
 };
 
 /**
- * Рівні якості. Порядок = зростання витрат; UI малює саме в ньому.
- * ⚠️ xhigh і max приймає ЛИШЕ gpt-image-2.5. Надіслати їх старій моделі — це
- * HTTP 400, тому список обов'язково їде разом із моделлю, а не глобально.
+ * Quality levels. Order = increasing cost; the UI draws them in that order.
+ * Only gpt-image-2.5 accepts xhigh and max. Sending them to an older model is
+ * HTTP 400, so the list must travel with the model, not globally.
  */
 const Q_CLASSIC  = ['low', 'medium', 'high', 'auto'];
 const Q_EXTENDED = ['low', 'medium', 'high', 'xhigh', 'max', 'auto'];
@@ -74,15 +74,15 @@ const Q_EXTENDED = ['low', 'medium', 'high', 'xhigh', 'max', 'auto'];
 const caps = (geometry, extra) => ({ ...geometry, ...extra });
 
 /**
- * `inputFidelity` — чи класти в запит `input_fidelity: high`.
- * gpt-image-2 і 2.5 обробляють вхід на високій точності самі, а параметр їм
- * невідомий і валить запит. Старі моделі без нього гірше тримають вхідні
- * пікселі, тому там він потрібен.
+ * `inputFidelity` — whether to put `input_fidelity: high` in the request.
+ * gpt-image-2 and 2.5 process input at high fidelity themselves, and the
+ * parameter is unknown to them and fails the request. Older models hold the
+ * input pixels worse without it, so they need it.
  */
 /*
- * `hintKey` — ключ i18n, який main.js кладе в title пікера. Самі назви
- * «Sunburst» і «Flare» нічого не кажуть про різницю, а перекладати їх не можна:
- * це офіційні ідентифікатори, які користувач бачить у панелі OpenAI.
+ * `hintKey` — the i18n key main.js puts in the picker title. The names
+ * "Sunburst" and "Flare" say nothing about the difference, and they must not
+ * be translated: they are official identifiers the user sees in the OpenAI dashboard.
  */
 const MODELS = [
     { id: 'gpt-image-2.5-sunburst', label: 'GPT Image 2.5 Sunburst', hintKey: 'model.sunburst',
@@ -99,23 +99,23 @@ const MODELS = [
       caps: caps(FIXED,     { qualities: Q_CLASSIC,  inputFidelity: true }) },
 ];
 
-/** Незнайома модель: найобережніші припущення, а не найзручніші. */
+/** An unknown model: the most cautious assumptions, not the most convenient. */
 const UNKNOWN_CAPS = caps(FIXED, { qualities: Q_CLASSIC, inputFidelity: false });
 
 /**
- * Моделі, які OpenAI вимикає. Звірено 2026-10-12 зі сторінкою
- * developers.openai.com/api/docs/deprecations (заміна там — «sunburst або flare»).
+ * Models OpenAI is shutting down. Checked 2026-10-12 against
+ * developers.openai.com/api/docs/deprecations (the replacement there is "sunburst or flare").
  *
- * ⚠️ Фільтр ЗА ДАТОЮ, а не просте викреслення з MODELS, — і це навмисно.
- * Реліз лишається в користувачів місяцями: викреслена зараз 1-mini зникла б на
- * сім тижнів раніше, ніж перестала працювати, а невикреслена 1.5 після 1 грудня
- * давала б помилку до наступного релізу. Дата ховає модель рівно тоді, коли
- * OpenAI її вимикає, — без нового релізу.
+ * The filter is BY DATE, not a simple strike from MODELS, and that is on purpose.
+ * A release stays on users' machines for months: striking 1-mini now would hide it
+ * seven weeks before it stops working, and leaving 1.5 in after 1 December would
+ * error until the next release. The date hides the model exactly when OpenAI
+ * shuts it down — without a new release.
  *
- * `replacement` — куди перейде збережений вибір. Не list[0]: mini — найдешевша
- * лінійка, і її користувач має опинитися на малій Flare, а не на базовій моделі.
- * chatgpt-image-latest у MODELS свідомо немає (лише фіксовані розміри, рухома
- * ціль); вона тут, щоб її не додали назад до вимкнення.
+ * `replacement` is where the saved choice moves. Not list[0]: mini is the cheapest
+ * line, and its user should land on the small Flare, not the base model.
+ * chatgpt-image-latest is deliberately absent from MODELS (fixed sizes only, a moving
+ * target); it is here so it is not added back before shutdown.
  */
 const RETIRED = new Map([
     ['gpt-image-1',          { shutdown: '2026-10-23', replacement: 'gpt-image-2.5-sunburst' }],
@@ -124,15 +124,15 @@ const RETIRED = new Map([
     ['chatgpt-image-latest', { shutdown: '2026-12-01', replacement: 'gpt-image-2.5-sunburst' }],
 ]);
 
-/** Дата вимкнення й заміна, або null для моделі без оголошеного вимкнення. */
+/** Shutdown date and replacement, or null for a model with no announced shutdown. */
 function retirement(modelId) {
     return RETIRED.get(modelId) || null;
 }
 
 /**
- * Модель уже вимкнена? Межа — початок дня вимкнення за UTC: година вимкнення
- * не оголошена, і краще сховати модель на кілька годин раніше, ніж віддати
- * помилку замість картинки.
+ * Is the model already shut down? The boundary is the start of the shutdown day
+ * in UTC: the hour is not announced, and it is better to hide the model a few
+ * hours early than to return an error instead of an image.
  */
 function isRetired(modelId, now = Date.now()) {
     const r = RETIRED.get(modelId);
@@ -140,43 +140,43 @@ function isRetired(modelId, now = Date.now()) {
 }
 
 function authHeader(apiKey) {
-    // ключ ніде не логуємо — навіть частково
+    // the key is never logged — not even in part
     return { Authorization: `Bearer ${apiKey}` };
 }
 
 /**
- * Перелік моделей.
+ * Model list.
  *
- * CAPS СТАТИЧНІ І ЛИШАЮТЬСЯ ТАКИМИ: /v1/models віддає сотні записів, у яких
- * немає ні розмірів, ні рівнів якості, а вгадувати їх за назвою — гадання.
- * Нову модель усе одно треба вписати в MODELS разом із caps.
+ * CAPS ARE STATIC AND STAY THAT WAY: /v1/models returns hundreds of records with
+ * neither sizes nor quality levels, and guessing them from the name is guesswork.
+ * A new model still has to be written into MODELS together with its caps.
  *
- * ⚠️ І КАТАЛОГ /v1/models ТУТ НЕ ПИТАЄМО — ЦЕ ВИСНОВОК З ВИМІРУ (2026-09-09).
- * Того дня тут побували дві версії перевірки доступності: спершу фільтр (чого
- * немає в каталозі — прибрати з пікера), потім помʼякшена позначка `listed`.
- * Обидві прибрані, бо проба самого ендпоінта генерації показала, що
- * gpt-image-2.5-sunburst і -flare ПРАЦЮЮТЬ на ключі, якого немає в каталозі.
- * Фільтр сховав би дві робочі моделі; позначка попереджала б про вигадану
- * проблему. /v1/models відповідає на питання «що OpenAI перелічує», а не «що
- * цьому ключу дозволено» — це різні речі, і друге питання має рівно одну
- * авторитетну адресу: той ендпоінт, яким ти справді користуєшся.
+ * AND WE DO NOT ASK THE /v1/models CATALOG HERE — THAT IS A CONCLUSION FROM
+ * MEASUREMENT (2026-09-09). That day two versions of an availability check lived
+ * here: first a filter (if it is not in the catalog, remove it from the picker),
+ * then a softened `listed` mark. Both were removed, because probing the generation
+ * endpoint itself showed that gpt-image-2.5-sunburst and -flare WORK on a key that
+ * is not in the catalog. The filter would have hidden two working models; the mark
+ * would have warned about an invented problem. /v1/models answers "what OpenAI
+ * lists", not "what this key is allowed" — those are different questions, and the
+ * second has exactly one authoritative address: the endpoint you actually use.
  *
- * Що лишилось замість перевірки: explainModelError() нижче робить справжню
- * відмову зрозумілою. Діагностика доступу — verify/check-models.sh, крок 2
- * (безкоштовна проба з контролями).
+ * What remains instead of a check: explainModelError() below makes a real
+ * refusal understandable. Access diagnostics are verify/check-models.sh, step 2
+ * (a free probe with controls).
  *
- * @param {string|null} _apiKey — не використовується; параметр є заради
- *        єдиного інтерфейсу з google.js, де ListModels справді залежить
- *        від ключа і є там джерелом правди.
+ * @param {string|null} _apiKey — unused; the parameter exists for a shared
+ *        interface with google.js, where ListModels really does depend on the
+ *        key and is the source of truth there.
  */
 async function models(_apiKey) {
     return availableModels(Date.now());
 }
 
 /**
- * Перелік на момент `now`: вимкнені відкинуто, а ті, що ще працюють, але мають
- * дату вимкнення, отримують підказку в пікері — інакше користувач дізнався б
- * про вимкнення лише з того, що модель сама змінилась.
+ * The list at `now`: retired models are dropped, and those that still work but
+ * have a shutdown date get a hint in the picker — otherwise the user would learn
+ * about the shutdown only from the model changing by itself.
  */
 function availableModels(now) {
     return MODELS.filter(m => !isRetired(m.id, now)).map(m => {
@@ -192,25 +192,25 @@ function availableModels(now) {
 }
 
 /**
- * Перетворює «404 model_not_found» на пояснення українською/англійською.
+ * Turns "404 model_not_found" into an English explanation.
  *
- * ⚠️ Друга половина рішення «не ховати, а пояснювати» (2026-09-09). Прибрати
- * модель із пікера легко — але тоді разом із пунктом зникає й причина, і
- * користувач не має ЖОДНОГО способу дізнатись, що сталося. Тому пункт лишаємо,
- * а натомість зобовʼязані зробити відмову зрозумілою: ID правильний, модель
- * існує, бракує саме доступу для цього ключа.
+ * The second half of the decision "do not hide, explain" (2026-09-09). Removing
+ * a model from the picker is easy — but then the reason disappears with the item,
+ * and the user has NO way to learn what happened. So the item stays, and we are
+ * obliged to make the refusal understandable: the ID is correct, the model exists,
+ * this key simply lacks access.
  *
- * Чужі помилки повертаються тим самим обʼєктом — і це перевіряє тест: обгортка,
- * що «на всяк випадок» переписує все підряд, ховає справжню причину так само
- * надійно, як прибраний пункт пікера.
+ * Unrelated errors are returned as the same object — a test checks that: a wrapper
+ * that rewrites everything "just in case" hides the real cause as reliably as a
+ * removed picker item.
  */
 function explainModelError(e, model, now = Date.now()) {
     if (!e || e.status !== 404) return e;
     const looksLikeModel = e.code === 'model_not_found'
         || /does not exist or you do not have access/i.test(e.message || '');
     if (!looksLikeModel) return e;
-    // Панель, відкрита ДО дня вимкнення, тримає стару модель до перезапуску:
-    // список перечитується лише на старті. Тоді «бракує доступу» — неправда.
+    // A panel opened BEFORE the shutdown day keeps the old model until restart:
+    // the list is reread only at start. Then "no access" would be untrue.
     const r = isRetired(model, now) ? retirement(model) : null;
     const replacement = r && (MODELS.find(x => x.id === r.replacement) || {}).label;
     const out = new HttpError(404, r
@@ -225,7 +225,7 @@ function capsFor(modelId) {
     return m ? m.caps : UNKNOWN_CAPS;
 }
 
-/** Витягує base64 PNG із відповіді, або кидає читабельну помилку. */
+/** Extracts a base64 PNG from the response, or throws a readable error. */
 function extractImages(json, n) {
     if (!json || !Array.isArray(json.data)) {
         throw new HttpError(0, openAiI18n.t('provider.openaiNoData'));
@@ -251,8 +251,8 @@ const blobName = (blob, i) => {
 };
 
 /**
- * Спільний читач SSE для /images/edits і /images/generations.
- * OpenAI віддає до трьох partial-подій, потім одну completed-подію.
+ * Shared SSE reader for /images/edits and /images/generations.
+ * OpenAI sends up to three partial events, then one completed event.
  */
 async function readImageStream({ url, headers, body, signal, onPartial,
                                  partialType, completedType }) {
@@ -275,14 +275,14 @@ async function readImageStream({ url, headers, body, signal, onPartial,
 }
 
 /**
- * Редагування наявних пікселів — основний шлях плагіна.
+ * Editing existing pixels — the plugin's main path.
  *
- * imageBlob — захоплена область (PNG без втрат або JPEG, див. capture.js).
- * references — додаткові зображення-референси; API приймає масив `image[]`
- * (задокументований приклад — кошик подарунків із чотирьох файлів). Маска
- * застосовується до ПЕРШОГО зображення, тому наша область іде першою.
- * onPartial — якщо задано, просимо stream:true і віддаємо проміжні кадри
- * (події `image_edit.partial_image`).
+ * imageBlob is the captured area (lossless PNG or JPEG, see capture.js).
+ * references are extra reference images; the API accepts an `image[]` array
+ * (the documented example is a gift basket from four files). The mask applies
+ * to the FIRST image, so our area goes first.
+ * onPartial — if set, we request stream:true and emit intermediate frames
+ * (`image_edit.partial_image` events).
  */
 async function editImage({ apiKey, model, prompt, imageBlob, maskBlob, references,
                           plan, background, signal, onPartial }) {
@@ -298,8 +298,8 @@ async function editImage({ apiKey, model, prompt, imageBlob, maskBlob, reference
         const meta = blobName(imgs[0], 0);
         fields.push({ name: 'image', data: imgs[0], ...meta });
     } else {
-        // масив лишаємо лише коли він справді потрібен: одиночний `image`
-        // працює давно й перевірено, а `image[]` — новіша форма
+        // keep the array only when it is actually needed: a single `image`
+        // has worked for a long time and is verified, while `image[]` is the newer form
         imgs.forEach((b, i) => fields.push({ name: 'image[]', data: b, ...blobName(b, i) }));
     }
 
@@ -311,15 +311,15 @@ async function editImage({ apiKey, model, prompt, imageBlob, maskBlob, reference
         fields.push({ name: 'mask', data: maskBlob, filename: 'mask.png', contentType: 'image/png' });
     }
     if (background) fields.push({ name: 'background', data: background });
-    // input_fidelity знають лише моделі покоління 1.x. gpt-image-2 і 2.5 і так
-    // тримають вхід на високій точності, а сам параметр їм невідомий і валить
-    // запит — тому рішення живе в caps моделі, а не в перевірці її назви.
+    // Only generation-1.x models know input_fidelity. gpt-image-2 and 2.5 already
+    // hold the input at high fidelity, and the parameter is unknown to them and
+    // fails the request — so the decision lives in the model's caps, not in a check of its name.
     if (modelCaps.inputFidelity) {
         fields.push({ name: 'input_fidelity', data: 'high' });
     }
     if (onPartial) {
         fields.push({ name: 'stream', data: 'true' });
-        // За замовчуванням partial_images=0: сервер тоді надсилає лише completed.
+        // The default partial_images=0: the server then sends only completed.
         fields.push({ name: 'partial_images', data: String(PARTIAL_IMAGES) });
     }
 
@@ -339,33 +339,34 @@ async function editImage({ apiKey, model, prompt, imageBlob, maskBlob, reference
     return { images: extractImages(json, 1), usage: json.usage || null };
 }
 
-/* ── Уточнення: /v1/responses з інструментом image_generation ──────────────── *
- * ⚠️ НЕ заміна images/edits, а доповнення. Головний шлях лишається головним: він
- * знає наші моделі поіменно, розширені рівні якості (xhigh/max) і дає usage, з
- * якого рахується точна ціна. Responses додає рівно одне, чого images/edits не
- * вміє принципово — ПАМ'ЯТЬ ПРО ПОПЕРЕДНІЙ КАДР: «а тепер тінь м'якшу» модель
- * тлумачить відносно власного минулого наміру, а не з голих пікселів.
+/* ── Refine: /v1/responses with the image_generation tool ──────────────────── *
+ * NOT a replacement for images/edits, an addition. The main path stays the main
+ * path: it knows our models by name, the extended quality levels (xhigh/max),
+ * and returns usage from which the exact price is computed. Responses adds
+ * exactly one thing images/edits fundamentally cannot do — MEMORY OF THE PREVIOUS
+ * FRAME: "and now a softer shadow" is interpreted against the model's own past
+ * intent, not from bare pixels.
  *
- * Ланцюг починається ліниво, і це навмисно: звичайна генерація не змінює
- * маршрут і не змінює ціну. Перше «Уточнити» відкриває розмову вже готовим
- * результатом як input_image — data-URI, повз Files API. Маска тут не потрібна:
- * уточнюємо цілу згенеровану плитку, а до документа вона повертається крізь ту
- * саму маску шару, що й завжди. З другого ходу передаємо лише id виклику.
+ * The chain starts lazily, on purpose: ordinary generation does not change the
+ * route or the price. The first Refine opens a conversation with the finished
+ * result as input_image — a data URI, bypassing the Files API. No mask is needed
+ * here: we refine the whole generated tile, and it returns to the document through
+ * the same layer mask as always. From the second turn we send only the call id.
  * ────────────────────────────────────────────────────────────────────────── */
 
 /**
- * Модель-господар: image_generation — інструмент, а не модель, і /v1/responses
- * вимагає в полі `model` саме чат-модель. Це протокольна константа, як BASE.
+ * Host model: image_generation is a tool, not a model, and /v1/responses
+ * requires a chat model in the `model` field. This is a protocol constant, like BASE.
  */
 const RESPONSES_HOST = 'gpt-5.6';
 
 /**
- * Поля інструмента. `model` задокументовано не було, тому воно тут опційне:
- * див. rejectsToolModel — перевіряємо на живому API, а не здогадкою.
+ * Tool fields. `model` was not documented, so it is optional here:
+ * see rejectsToolModel — we check it on the live API, not by guessing.
  */
 function refineTool({ plan, model, withModel, partials }) {
-    // Формат просимо явно: у Responses він за замовчуванням не png, а вставка
-    // без pHYs розсипається — див. OUTPUT_FORMAT.
+    // Ask for the format explicitly: in Responses the default is not png, and
+    // insertion without pHYs falls apart — see OUTPUT_FORMAT.
     const tool = { type: 'image_generation', output_format: OUTPUT_FORMAT };
     if (withModel) tool.model = model;
     if (plan && plan.size) tool.size = plan.size;
@@ -375,23 +376,24 @@ function refineTool({ plan, model, withModel, partials }) {
 }
 
 /**
- * ⚠️ ХІД ≥2 ЙДЕ previous_response_id, А НЕ ЗІБРАНИМ РУКАМИ input — І ЦЕ ВИМІР,
- * А НЕ СМАК. Приклад із документації подає назад сам `image_generation_call`
- * за id. З міркувальною моделлю-господарем це 400 (виміряно 2026-09-09):
+ * TURN ≥2 GOES BY previous_response_id, NOT BY AN INPUT ASSEMBLED BY HAND — AND
+ * THIS IS A MEASUREMENT, NOT A PREFERENCE. The documentation example sends the
+ * `image_generation_call` back by id. With a reasoning host model that is a 400
+ * (measured 2026-09-09):
  *   Item 'ig_…' of type 'image_generation_call' was provided without its
  *   required 'reasoning' item: 'rs_…'
- * Вихідні елементи утворюють граф (reasoning → image_generation_call), і вузол
- * не можна вставити назад без батька. previous_response_id для того й існує:
- * ланцюг тягне сервер, а клієнт не моделює чужу структуру.
+ * Output items form a graph (reasoning → image_generation_call), and a node
+ * cannot be inserted back without its parent. previous_response_id exists for
+ * that: the server carries the chain, and the client does not model someone else's structure.
  */
 function refineInput({ prompt, previousResponseId, previousImage }) {
     const content = [{ type: 'input_text', text: prompt }];
     if (!previousResponseId) {
-        // Перший хід: посилатись нема на що, тому даємо пікселі попереднього
-        // результату — саме вони і є предметом уточнення.
+        // First turn: there is nothing to refer to, so we give the pixels of the
+        // previous result — those pixels are what is being refined.
         content.push({
             type: 'input_image',
-            // кешований кадр міг прийти від Gemini — а той віддає лише JPEG
+            // a cached frame may have come from Gemini — and that returns JPEG only
             image_url: `data:${mimeOfB64(previousImage)};base64,${previousImage}`,
             detail: 'auto',
         });
@@ -400,17 +402,17 @@ function refineInput({ prompt, previousResponseId, previousImage }) {
 }
 
 /**
- * Витягує картинку й id відповіді. responseId критичний: без нього наступне
- * «Уточнити» почне ланцюг спочатку й розмова втратить пам'ять. callId лишається
- * заради логу — за ним видно, що інструмент справді малював.
+ * Extracts the image and the response id. responseId is critical: without it the
+ * next Refine would start the chain over and the conversation would lose its memory.
+ * callId stays for the log — it shows that the tool actually drew.
  */
 function extractResponseImage(json) {
     const output = json && Array.isArray(json.output) ? json.output : [];
     const call = output.find(o => o && o.type === 'image_generation_call'
                                 && typeof o.result === 'string' && o.result);
     if (!call) {
-        // Модель могла відповісти текстом замість картинки — показуємо цей
-        // текст, бо саме він пояснює відмову.
+        // The model may have answered with text instead of an image — show that
+        // text, because it is what explains the refusal.
         const said = output
             .filter(o => o && o.type === 'message')
             .flatMap(o => (o.content || []).map(c => c && c.text).filter(Boolean))
@@ -425,7 +427,7 @@ function extractResponseImage(json) {
     };
 }
 
-/** SSE Responses має власні імена подій — форма b64 інша, ніж у images/*. */
+/** Responses SSE has its own event names — the b64 shape differs from images/*. */
 async function readResponsesStream({ url, headers, body, signal, onPartial }) {
     let done = null;
     const last = await requestStream(url, { method: 'POST', headers, body, signal }, ev => {
@@ -444,10 +446,10 @@ async function readResponsesStream({ url, headers, body, signal, onPartial }) {
 }
 
 /**
- * Відмова саме через поле `model` в інструменті — єдиний випадок, коли є що
- * зробити далі. Формулювання навмисно вузьке: «model not found» для
- * моделі-господаря сюди потрапити НЕ повинно, інакше ми б мовчки підмінили
- * зрозумілу помилку другим таким самим запитом.
+ * A refusal specifically about the `model` field on the tool — the only case
+ * where there is something to do next. The wording is deliberately narrow: "model
+ * not found" for the host model must NOT land here, or we would silently replace
+ * a clear error with a second identical request.
  */
 function rejectsToolModel(e) {
     if (!e || e.status !== 400) return false;
@@ -457,7 +459,7 @@ function rejectsToolModel(e) {
 }
 
 /**
- * Уточнення попереднього результату.
+ * Refine the previous result.
  * @returns {{images:string[], callId:string|null, usage:object|null}}
  */
 async function refine({ apiKey, model, prompt, previousResponseId, previousImage,
@@ -485,23 +487,23 @@ async function refine({ apiKey, model, prompt, previousResponseId, previousImage
     };
 
     if (onProgress) onProgress(openAiI18n.t('provider.refining'));
-    // Без цього рядка неможливо відрізнити перший хід від продовження розмови.
+    // Without this line the first turn cannot be told from a continuation.
     console.log(`[openai] responses/${RESPONSES_HOST} + image_generation, ` +
-                (previousResponseId ? `продовження (${previousResponseId})` : 'перший хід (з пікселями)'));
+                (previousResponseId ? `continuation (${previousResponseId})` : 'first turn (with pixels)'));
 
     let res;
     try {
         res = await withRetry(() => send(true), { signal });
     } catch (e) {
         if (!rejectsToolModel(e)) throw explainModelError(e, model);
-        console.warn('[openai] інструмент не приймає model — уточнюю моделлю API за замовчуванням');
+        console.warn('[openai] the tool does not accept model — refining with the API default model');
         res = await withRetry(() => send(false), { signal });
     }
     if (onProgress) onProgress(openAiI18n.t('provider.done'));
     return res;
 }
 
-/** Генерація з нуля — коли пікселі свідомо ігноруються. */
+/** Generate from scratch — when pixels are deliberately ignored. */
 async function generateFresh({ apiKey, model, prompt, plan, background, signal, onPartial }) {
     const payload = { model, prompt, n: 1, output_format: OUTPUT_FORMAT };
     if (plan.size) payload.size = plan.size;
@@ -535,31 +537,31 @@ async function generateFresh({ apiKey, model, prompt, plan, background, signal, 
 }
 
 /**
- * Єдиний вихід контракту: { images: [base64 PNG], usage }.
- * usage приходить від самого API (input_tokens / output_tokens / image_tokens),
- * а usage.js оцінює USD за версіонованою таблицею офіційних тарифів.
+ * The single contract output: { images: [base64 PNG], usage }.
+ * usage comes from the API itself (input_tokens / output_tokens / image_tokens),
+ * and usage.js estimates USD from a versioned table of official rates.
  */
 async function generate({ apiKey, model, prompt, imageBlob, maskBlob, references,
                           plan, background, ignorePixels, signal, onPartial, onProgress }) {
     if (!apiKey) throw new Error(openAiI18n.t('provider.noKey', { provider: 'OpenAI' }));
     if (!prompt || !prompt.trim()) throw new Error(openAiI18n.t('provider.emptyPrompt'));
 
-    // Запобіжник, а не основний механізм: рівень якості вже узгоджено з моделлю
-    // в UI. Але між вибором і запитом користувач міг перемкнути модель, а
-    // `xhigh`/`max` знає лише 2.5 — сервер відповів би 400 замість картинки.
+    // A guard, not the main mechanism: quality is already reconciled with the model
+    // in the UI. But between the choice and the request the user may have switched
+    // models, and only 2.5 knows `xhigh`/`max` — the server would answer 400 instead of an image.
     const allowed = capsFor(model).qualities;
     if (plan && plan.quality && allowed && !allowed.includes(plan.quality)) {
-        console.warn(`[openai] ${model} не приймає quality=${plan.quality} — прошу без нього`);
+        console.warn(`[openai] ${model} does not accept quality=${plan.quality} — requesting without it`);
         plan = { ...plan, quality: 'auto' };
     }
 
     if (onProgress) onProgress(openAiI18n.t('provider.generating'));
     const useEdit = imageBlob && !ignorePixels;
-    // «модель не бачить виділену область» діагностується лише цим рядком:
-    // без нього неможливо відрізнити редагування від генерації з нуля
-    console.log(`[openai] ${useEdit ? 'images/edits' : 'images/generations (БЕЗ пікселів області)'}` +
-                `${imageBlob ? `, вхід ${(imageBlob.size / 1024).toFixed(0)} КБ` : ', входу немає'}` +
-                `${useEdit && maskBlob ? ', маска є' : ''}${ignorePixels ? ', «ігнорувати пікселі» увімкнено' : ''}`);
+    // "the model does not see the selected area" is diagnosed only by this line:
+    // without it an edit cannot be told from generation from scratch
+    console.log(`[openai] ${useEdit ? 'images/edits' : 'images/generations (WITHOUT area pixels)'}` +
+                `${imageBlob ? `, input ${(imageBlob.size / 1024).toFixed(0)} KB` : ', no input'}` +
+                `${useEdit && maskBlob ? ', mask present' : ''}${ignorePixels ? ', "ignore pixels" is on' : ''}`);
     let res;
     try {
         res = await withRetry(() => (useEdit
@@ -567,7 +569,7 @@ async function generate({ apiKey, model, prompt, imageBlob, maskBlob, references
                           plan, background, signal, onPartial })
             : generateFresh({ apiKey, model, prompt, plan, background, signal, onPartial })), { signal });
     } catch (e) {
-        // Єдина точка, де відомі й модель, і помилка — тому пояснення саме тут.
+        // The only place that knows both the model and the error — so the explanation is here.
         throw explainModelError(e, model);
     }
     if (onProgress) onProgress(openAiI18n.t('provider.done'));
@@ -582,7 +584,7 @@ module.exports = {
     supportsReferences: true,
     supportsTransparent: true,
     supportsStream: true,
-    // Розмова про попередній кадр — лише в /v1/responses, і лише тут.
+    // A conversation about the previous frame exists only on /v1/responses, and only here.
     supportsRefine: true,
     keyPage: 'https://platform.openai.com/api-keys',
     models,
@@ -596,8 +598,8 @@ module.exports = {
     refine,
     RESPONSES_HOST,
     OUTPUT_FORMAT,
-    /* Чисті частини маршруту уточнення, відкриті рівно заради тестів: зібрати
-       тіло запиту й розібрати відповідь можна без мережі, а саме у формі тіла
-       й ховаються помилки, які живий прогін показав би найдорожчим способом. */
+    /* Pure pieces of the refine route, exposed exactly for tests: the request
+       body can be assembled and the response parsed without the network, and it
+       is in the body shape that the errors hide which a live run would show in the most expensive way. */
     _refineParts: { refineTool, refineInput, extractResponseImage, rejectsToolModel },
 };
